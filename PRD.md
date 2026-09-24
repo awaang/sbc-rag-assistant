@@ -1,6 +1,6 @@
 # Product Requirements Document: SBC Plan Q&A RAG Demo
 
-> **Initialization snapshot:** This is the initial requirements baseline. It defines product constraints, not finalized implementation technology choices; unresolved choices remain **TBD** until evaluated and recorded in `PLAN.md` and `ARCHITECTURE.md`.
+This PRD records the agreed project requirements and technology constraints. The selected stack is recorded in `PLAN.md` and `ARCHITECTURE.md`; evaluation-dependent settings remain open until measured.
 
 ## Problem
 
@@ -14,20 +14,27 @@ This project will demonstrate a question-answering tool that reads real, publicl
 - **Demo users** who ask natural-language questions about the plans represented in the document set.
 - **Project evaluators** who need to inspect the retrieval, extraction, and answer quality of the demo.
 
-Users must authenticate before accessing the question-answering application. Authentication is in scope; provider, credential lifecycle, and account model are **TBD**.
+Users must authenticate before accessing the question-answering application. Firebase Authentication is selected for the demo; admin permissions are enforced server-side through Firebase custom claims verified by the application server.
 
 ## Goals
 
-- Ingest exactly 6 publicly available SBC PDFs, with a mix of HMO, PPO, and HDHP plans, sourced from insurer sites such as Kaiser, Aetna, and Guardian.
+- Ingest exactly 6 publicly available SBC PDFs, aiming for a mix of HMO, PPO, and HDHP plans, sourced from insurer sites such as Kaiser, Aetna, and Guardian. No HDHP SBC has been identified so far; implementation may proceed, and adding an HDHP SBC remains an open corpus decision.
 - Maintain a distinction between received candidate documents and the verified six-document SBC ingestion corpus; only documents confirmed as SBCs may count toward the corpus requirement. The six currently received PDFs have been inspected and appear to be plan/benefit summaries (including dental and vision summaries), not the standardized SBC form; they do not yet satisfy this requirement.
 - Answer questions about plan benefits and costs, including single-plan lookups and comparisons across plans.
 - Ground answers in the source documents and cite the source plan and section for every answer.
 - Avoid guessing: report low confidence or insufficient source support instead of returning an unsupported answer.
-- Compare BM25 keyword retrieval with semantic retrieval using locally generated sentence-transformer embeddings. Vector-index technology and hosting are **TBD**.
+- Compare two retrieval methods: BM25 keyword retrieval and semantic retrieval using locally generated sentence-transformer embeddings searched with FAISS.
+- Generate document and query embeddings locally with sentence-transformers; use FAISS for semantic search, with no embedding API. Persist approved document embedding values as ordinary records in Neon so the deployed API can build its in-memory FAISS index. Neon remains the durable relational store; pgvector is not used in the initial implementation.
+- Compare fixed-size chunking with semantic/section-aware chunking; evaluate both retrieval methods on both chunk sets using the same labeled questions.
+- Provide an authenticated evaluation playground where users can select a retrieval method and chunking strategy. Ordinary question-answer mode uses the configuration selected from measured results.
 - Extract key numerical benefit details into a structured per-plan schema to support reliable lookups and comparisons.
 - Evaluate the system with approximately 20–30 questions with known correct answers, measuring answer accuracy, latency, and token usage per query.
 - Document implementation decisions, chunking tradeoffs, retrieval results, extraction accuracy, and what would change with a real budget.
-- Use the Gemini API only for the final answer-synthesis step, after evidence has been retrieved and checked. The exact model identifier, API key variable name, and request limits are **TBD**; embeddings remain local and do not use Gemini.
+- **Initial implementation:** use deterministic answer formatting for verified facts, comparisons, citations, clarification, and abstention. Do not integrate or call Gemini in the initial implementation.
+- **Later phase:** Gemini may be added only after the deterministic evidence-grounded answer path is implemented and evaluated, and only as an optional final phrasing step over already validated evidence. It must not select facts, fill gaps, alter citations, or override abstention. Its availability/free-tier status is not a prerequisite for the initial demo.
+- Provide actual admin PDF uploads and review controls. Uploads are stored durably; a local admin ingestion command processes them and results remain unavailable to answers until reviewed and approved.
+- Target a fully free, no-credit-card local/deployed demo using Firebase Spark, Neon Free, and Render Free, subject to current provider limits and account verification. Free-tier cold starts and quotas are acceptable limitations and must be documented.
+- Show basic evidence-path/citation diagnostics to all users and detailed retrieval, parsing, extraction, and ingestion diagnostics to admins.
 
 ## Non-goals
 
@@ -48,8 +55,9 @@ Users must authenticate before accessing the question-answering application. Aut
 
 2. **Retrieval**
    - Provide keyword retrieval using BM25.
-   - Provide semantic retrieval using locally generated sentence-transformer embeddings and a vector index. Index technology and hosting are **TBD**.
+   - Provide semantic retrieval using locally generated sentence-transformer embeddings and FAISS vector search, with no embedding API.
    - Compare both methods on the evaluation questions and report which question types each handles better and why.
+- Evaluate all four combinations of the two retrieval methods and two chunking strategies against the same questions.
   - BM25 and semantic retrieval must be independently measurable. Which method the demo uses at runtime, and whether retrieval fusion is needed, are **TBD** until evaluation results are available.
 
 3. **Structured benefit extraction**
@@ -61,7 +69,8 @@ Users must authenticate before accessing the question-answering application. Aut
 
 4. **Question answering and citations**
    - Accept natural-language questions about a plan or comparisons across plans.
-   - Synthesize answers from retrieved evidence and structured extracted data; keep LLM use to the final answer synthesis step.
+   - Initial implementation produces answers from retrieved evidence and structured extracted data using deterministic formatting; Gemini is excluded from this phase.
+   - In a later phase, Gemini may optionally phrase an already validated answer. The evidence gate, facts, citations, and abstention decision remain application-controlled.
    - Cite the source plan and relevant SBC section in every answer; include the page when available.
    - When confidence is low or supporting evidence is missing, say that the answer cannot be established from the available documents instead of guessing.
    - The initial abstention rule is evidence-based: do not provide a requested value if the structured record or retrieved source does not support it with a traceable citation. Numeric confidence thresholds are **TBD** pending evaluation.
@@ -75,10 +84,13 @@ Users must authenticate before accessing the question-answering application. Aut
 6. **Authentication**
    - Require authentication before users can submit questions or view answers.
    - The application server must validate authentication on every protected request; frontend-only checks do not satisfy this requirement.
-   - Provider, credential lifecycle, and whether users need individual accounts or may share demo access are **TBD**.
+   - Use Firebase Authentication; enforce roles and access on the server. Assign initial admin claims using a privileged local bootstrap operation, not a public self-promotion route.
 
 7. **User interface**
    - Provide a simple interface for authentication, question submission, answers or abstentions, and citations. Visual polish and additional UI features are out of scope.
+   - Provide real admin PDF upload, processing status, parsed evidence/extraction review, and approval controls. The local ingestion command performs PDF parsing and embedding generation to stay within free-host resource limits.
+   - Show basic diagnostics to all users and advanced diagnostics only to admins.
+   - Provide an evaluation playground to select BM25 or semantic search and fixed-size or semantic/section-aware chunks. Detailed rank and score traces remain admin-only.
 
 ## Non-functional requirements
 
@@ -88,20 +100,26 @@ Users must authenticate before accessing the question-answering application. Aut
 - **Local retrieval:** Semantic embeddings must be generated locally without requiring an embedding API.
 - **Evaluation visibility:** Retrieval quality, answer accuracy, extraction accuracy, latency, and token usage must be measurable on the evaluation set. Numeric pass thresholds are **TBD**; report baseline measurements.
 - **Performance targets:** Acceptable latency thresholds are **TBD**.
-- **Security:** Authentication is required and enforced server-side. Credential storage, session duration, and account recovery policy are **TBD**.
-- **Privacy, availability, and deployment requirements:** **TBD**; user-query retention and hosting environment have not been specified.
+- **Security:** Authentication and admin roles are enforced server-side; privileged Firebase credentials never enter browser code or source control.
+- **Deployment:** Run locally and deploy on no-card free tiers. Free-tier sleep/cold starts, quotas, and provider availability are acceptable demo limitations; uninterrupted availability is not promised.
+- **Privacy/query retention:** Query-retention policy remains **TBD**; do not retain query text by default unless explicitly needed for evaluation and documented.
 
 ## Acceptance criteria
 
 - [ ] The corpus contains exactly 6 publicly available SBC PDFs and includes HMO, PPO, and HDHP plans.
 - [ ] SBCs are parsed with table structure considered, and chunks do not split table rows.
 - [ ] BM25 and local semantic retrieval are both implemented and evaluated against approximately 20–30 questions with known answers.
+- [ ] Semantic embeddings are generated locally and searched with FAISS; no hosted embedding API or pgvector vector index is required for the initial implementation.
 - [ ] Evaluation results describe which retrieval method performs better for which question types and why.
+- [ ] Fixed-size and semantic/section-aware chunking are each evaluated with both retrieval methods, and an evaluation playground lets users compare the configurations.
 - [ ] Deductible, ER cost sharing, copay, and out-of-pocket maximum values are extracted into a per-plan structured representation with traceable source references, and extraction accuracy is measured against verified values.
 - [ ] The tool can answer supported single-plan and cross-plan questions, including numerical benefit questions.
 - [ ] Every generated answer cites its source plan and SBC section, with page when available.
 - [ ] For low-confidence or unsupported questions, the tool reports insufficient evidence rather than guessing.
 - [ ] Per-query accuracy, latency, and token usage are measured or recorded as applicable to the final synthesis approach.
+- [ ] Initial answer flow is complete and evaluated without Gemini; any later Gemini integration is a separate phase and cannot weaken evidence, citation, or abstention behavior.
 - [ ] The README explains chunking decisions, BM25 versus semantic retrieval results, extraction accuracy, and what would be done differently with a real budget.
 - [ ] Unauthenticated requests are rejected by the application server; authenticated users can access the question-answering flow.
-- [ ] Authentication provider/account model, citation presentation details, and latency targets are documented before they are treated as fixed requirements.
+- [ ] Admin uploads are durable; local ingestion, review, and approval gating work end to end, and non-admin users cannot invoke admin operations.
+- [ ] Basic diagnostics are available to all users and advanced diagnostics only to admins.
+- [ ] The application runs locally and is deployed on no-card free tiers with cold-start/quota limitations documented.

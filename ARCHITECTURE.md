@@ -1,157 +1,87 @@
 # SBC RAG Assistant Architecture
 
-> **Initialization snapshot:** This is an initial conceptual architecture. It captures required flows and open questions; component and technology choices are not finalized. Items marked **TBD** remain open pending evaluation and explicit documentation.
+## Purpose and status
 
-## Purpose and scope
+The demo answers questions about health plan costs and coverage from exactly six verified public Summary of Benefits and Coverage (SBC) PDFs. Its core requirements are correctness, traceable citations, table fidelity, and abstention when evidence is insufficient. The repository is currently at the planning/candidate-document stage; no application or ingestion implementation exists yet.
 
-This architecture describes the demo for answering questions from exactly six publicly available Summary of Benefits and Coverage (SBC) PDFs. It supports authenticated access, table-aware ingestion, BM25 and local semantic retrieval, structured benefit extraction, cited answers, abstention when evidence is insufficient, and evaluation on a labeled question set.
+Six supplied candidate PDFs are stored in `data/source-documents/received/`. Based on titles and inspected contents, they appear to be plan or benefit summaries, including dental and vision summaries, rather than standardized medical SBCs. They do not qualify for the active corpus unless the scope is deliberately changed. No HDHP SBC has been identified yet; this is an open corpus gap, not a blocker to beginning implementation, and an HDHP SBC may be added later. Exact corpus membership remains **TBD**.
 
-The corpus must include a mix of HMO, PPO, and HDHP plans. Six PDFs supplied with the project prompt are stored in `data/source-documents/received/` and have been inspected. Based on their titles and contents, they appear to be plan/benefit summaries rather than standardized SBC forms; none is currently verified as eligible for the required six-document corpus. Exact corpus membership remains **TBD**; see the candidate inventory below.
+### Received candidate inventory
 
-### Received source-document inventory
-
-The received filenames and inspected contents indicate the following. These files are not treated as indexed SBC documents because they do not appear to be standardized SBC forms.
-
-| Received file | Filename-indicated type | Corpus status |
+| Received file | Provisional identity | Corpus status |
 |---|---|---|
-| `Aetna OAMC Plan Summary  01.01.2017.pdf` | Aetna Open Access Managed Choice POS medical plan summary, effective 2017-01-01 | Inspected; appears to be a plan summary, not a standardized SBC |
-| `Aetna HMO Plan Summary 01.01.2017.pdf` | Aetna HMO medical plan summary, effective 2017-01-01 | Inspected; appears to be a plan summary, not a standardized SBC |
-| `Kaiser HMO Plan Summary 2017.pdf` | Kaiser Permanente Traditional Plan benefit summary, 2017 | Inspected; explicitly titled Benefit Summary, not a standardized SBC |
-| `Kaiser WA.pdf` | Group Health Cooperative Multisite Benefit Summary, effective 2017-01-01 | Inspected; explicitly titled Benefit Summary, not a standardized SBC |
-| `Guardian Dental PPO Plan Summary 2017.pdf` | Guardian DentalGuard Preferred PPO dental benefit summary, 2017 | Inspected; dental-only summary, not a medical SBC |
-| `Guardian VSP Vision Plan Summary 2017.pdf` | Guardian VSP vision benefit summary, 2017 | Inspected; vision-only summary, not a medical SBC |
+| `Aetna OAMC Plan Summary  01.01.2017.pdf` | Aetna Open Access Managed Choice POS medical plan summary, effective 2017-01-01 | Inspected; appears not to be a standardized SBC |
+| `Aetna HMO Plan Summary 01.01.2017.pdf` | Aetna HMO medical plan summary, effective 2017-01-01 | Inspected; appears not to be a standardized SBC |
+| `Kaiser HMO Plan Summary 2017.pdf` | Kaiser Permanente Traditional Plan benefit summary, 2017 | Inspected; explicitly a benefit summary |
+| `Kaiser WA.pdf` | Group Health Cooperative Multisite Benefit Summary, effective 2017-01-01 | Inspected; explicitly a benefit summary |
+| `Guardian Dental PPO Plan Summary 2017.pdf` | Guardian DentalGuard Preferred PPO dental benefit summary, 2017 | Inspected; dental-only, outside intended medical SBC corpus |
+| `Guardian VSP Vision Plan Summary 2017.pdf` | Guardian VSP vision benefit summary, 2017 | Inspected; vision-only, outside intended medical SBC corpus |
 
-These six supplied PDFs can be processed without source URLs. Use the filename and a stable document ID as the source reference, and retain page and section details from the PDF. A source URL is optional for processing and citation, but public availability must be verified separately before a file counts toward the PRD's public-SBC corpus requirement. The received files may be kept as excluded candidates or supplemental examples; do not silently count them as the required six SBCs. No HDHP SBC has been identified in the received set.
+## Technology decisions
 
-## System overview
+- **Backend/API:** Python 3.11 + FastAPI. Python supports the parser, retrieval, extraction, and local embedding libraries; FastAPI provides request validation and a clear boundary for server-side authentication/authorization.
+- **Frontend:** React + TypeScript + shadcn/ui, deployed as a Render static site and calling FastAPI over HTTP.
+- **Identity and roles:** Firebase Authentication Spark. Users authenticate with email/password or an enabled social provider. The browser sends a Firebase ID token; FastAPI verifies it on every protected call. Admin status is a Firebase custom claim assigned using a local one-time bootstrap tool and is checked server-side for upload, review, and administrative diagnostics.
+- **Database:** Neon Postgres Free. Store document/plan metadata, uploaded original PDF bytes for the small demo corpus, parsed pages/table rows/chunks, structured benefits, citations, ingestion state, and evaluation labels/results. Browser code never receives Neon credentials.
+- **Keyword retrieval:** BM25 using `rank-bm25`, independently measurable over canonical chunks.
+- **Semantic retrieval:** Generate document embeddings with configurable `sentence-transformers/all-MiniLM-L6-v2` in the local ingestion CLI; generate each query embedding in the FastAPI service using the same model version. Persist approved document embeddings with model/version and chunk IDs in Neon as ordinary application data. The API builds an in-memory FAISS index from approved embeddings at startup and refreshes/rebuilds it after approval changes. No embedding API or pgvector index is used in the initial implementation. FAISS result IDs map back to canonical chunks/provenance in Neon. Verify that the deployed API can load the model and index within its memory/startup limits.
+- **Vector-backend scope:** The requested comparison is BM25 versus semantic retrieval. Use FAISS as the one semantic search implementation; do not add Chroma or pgvector in parallel unless a later requirement or measured limitation justifies a documented change.
+- **Chunking:** Compare fixed-size chunks with semantic/section-aware chunks. Preserve each table row and the header/plan/network context needed to interpret it. Select using labeled retrieval results, not intuition alone.
+- **Experiment matrix:** Retrieval method and chunking strategy are separate variables: evaluate BM25 and semantic vector search over each of the two chunk sets (four combinations) using the same question set. Store both chunk sets with a strategy/version key, not separate copies of the source or benefit records.
+- **Answers, initial implementation:** Deterministic response formatting for structured numeric facts and comparisons, plus clarification and abstention. Gemini is not integrated or called in this phase.
+- **Answers, later optional phase:** Gemini may be added only after the deterministic answer path is implemented and evaluated. It may phrase backend-validated answer content, but cannot select facts, create or alter citations, fill evidence gaps, or override abstention. The application remains usable when Gemini is unavailable or disabled.
+- **Deployment:** Render Free hosts the static frontend and FastAPI service. Neon and Firebase provide persistent database and identity services. Render's web service may sleep after inactivity and has an ephemeral filesystem; all durable records and files therefore live outside Render. First request after sleep may take about a minute.
+- **No-card cost constraint:** Target only free/no-payment-method plans, no custom domain, no SMS authentication, no paid model/API, and no paid persistent disk. Provider quotas, account verification, availability, and plan terms can change; confirm before deployment. A free tier is not an uptime guarantee.
 
-The system has three flows:
+## Corpus and ingestion flow
 
-1. **Ingestion:** PDFs are parsed with table structure preserved, section/page and plan metadata are attached, content is chunked without splitting table rows, and both BM25 and vector indexes are built. A structured extraction stage records selected numerical benefits with provenance.
-2. **Question answering:** The user authenticates in the frontend. The application server validates authentication, identifies the requested plan(s), retrieves evidence from BM25 and/or semantic indexes, consults structured benefits for numerical questions, checks evidence sufficiency, and returns a cited answer or an abstention.
-3. **Evaluation:** A 20–30 question set with verified answers is run against BM25 and semantic retrieval and the answer pipeline. Results capture retrieval/answer accuracy, extraction accuracy, latency, and token usage where applicable.
+### Real admin upload and processing
 
-## Components
+1. An admin uploads a PDF and descriptive metadata in React.
+2. FastAPI verifies the Firebase ID token and admin claim, checks file type/size, and stores the original PDF and upload record in Neon. Status begins as `uploaded`.
+3. A local ingestion CLI, run by the project maintainer, fetches pending uploads from Neon. It parses pages and tables, records section/page provenance, normalizes rows, creates row-preserving chunks, extracts candidate benefits, generates document embeddings locally, and writes outputs back to Neon. Embeddings are stored as ordinary per-chunk values with model/version metadata; this does not require pgvector.
+4. The ingestion process records issues and moves a document to `needs_review`; extracted benefit records remain unverified.
+5. An admin reviews source metadata, parsed evidence, and candidate benefit values in the UI; corrections/approval are recorded. Only approved documents/chunks and verified benefit values enter normal answer retrieval.
 
-### User interface and authentication
+This is a genuine upload and ingestion workflow. PDF parsing and document-embedding generation consume the maintainer's local CPU/RAM when the CLI runs. At query time, the deployed FastAPI service embeds the question locally, searches its in-memory FAISS index, and fetches matching approved chunks/provenance from Neon. It loads the sentence-transformer model and approved embeddings on startup, and refreshes the index after approval changes. Render restarts/cold starts therefore reconstruct the index from Neon, without relying on the maintainer's computer. Verify that the model and index fit the selected API service's memory and startup limits. Keep upload size/corpus limits within Neon Free storage/egress quotas. If documents outgrow Neon storage, evaluate a no-card object-storage service before changing the design.
 
-- **Frontend:** Accepts a natural-language query and displays the answer, citations, or an insufficient-evidence response. The interface communicates with the application server over an HTTP API. Detailed visual design is outside the demo requirements.
-- **Authentication:** Authentication is required. The frontend obtains/holds the selected provider's credential and includes it in protected requests.
-- **Application server:** Validates credentials on every protected request before processing a question. Frontend-only authentication checks are insufficient.
-- Provider, account model (individual accounts versus shared demo access), credential/session lifecycle, and account recovery are **TBD**.
+### Parsing, provenance, and data records
 
-### Ingestion pipeline
+For every document retain stable document and plan IDs, insurer, plan name/type/year, verified public source URL, original filename, upload/approval state, and document checksum. Public availability and SBC status must be established before it counts toward the six-SBC requirement.
 
-Process exactly six source PDFs:
+For parsed pages/rows/chunks retain document/plan IDs, stable record IDs, page, section heading when detectable, table and row context, parse status, and chunk strategy/version. Each table row must stay intact with sufficient headers/context; mark unavailable provenance rather than inventing it.
 
-1. **Document registry:** Assign each confirmed SBC a stable plan/document identity and record insurer, plan type, available plan-year metadata, and source URL when known. For supplied PDFs without URLs, retain the provided filename and delivery context; missing URLs do not prevent processing, but public availability must be verified to count toward the required corpus.
-2. **PDF parsing:** Extract narrative text and tables using a parser that preserves table structure. Evaluate candidate parsers against the selected documents; parser choice is **TBD**.
-3. **Normalization and provenance:** Retain plan identity, document identity, section heading, page number, and table/row context wherever available. Mark missing provenance rather than inventing it.
-4. **Chunking:** Compare fixed-size and semantic strategies. Keep each table row intact and include its header/context. Select and document a strategy based on the evaluation set.
-5. **Index construction:** Build a BM25 keyword index and a semantic vector index using sentence-transformer embeddings generated locally. Vector-index technology and hosting are **TBD**; embeddings must not require a hosted embedding API.
-6. **Structured benefit extraction:** Extract at least deductibles, ER cost sharing, copays, and out-of-pocket maximums per plan. Store each value with document, section, and page provenance when available; unknown/unreadable values remain missing rather than inferred.
+Structured benefit records store the value exactly as stated, category, plan/document identity, network and individual/family distinctions when present, source section/page/row, reviewer status, and missing/ambiguous/conflicting status. Initial categories are deductible, ER cost sharing, copays, and out-of-pocket maximum. Missing data is never represented as zero.
 
-Parser, embedding model, vector store/database service, exact chunk configuration, structured storage implementation, and ingestion invocation method are **TBD**. Local embedding generation is required; the vector index may be hosted by the separate database service once that choice is made.
-
-### Retrieval and answer service
-
-- **Plan resolution:** Identify the plan or plans named in the question. Behavior for ambiguous plan names is to request clarification rather than silently select a plan.
-- **Structured lookup:** For numerical benefit questions, read the extracted per-plan record and retain its source reference.
-- **BM25 retrieval:** Search parsed chunks using keyword ranking.
-- **Semantic retrieval:** Embed the query locally and search the vector index.
-- **Retrieval evaluation:** Run each retrieval method independently over the evaluation questions and record results by question type. Runtime fusion is not required initially; whether to add fusion or choose a method per question type is **TBD based on results**.
-- **Evidence gate:** Before generation, require source evidence that supports the requested claim and has a usable plan/section citation. If absent, contradictory, or ambiguous, return an insufficient-evidence response and do not ask the LLM to supply the missing fact.
-- **Answer synthesis:** Use the Gemini API only to synthesize a concise answer from verified structured values and retrieved evidence. Query and document embeddings remain local and do not use Gemini.
-- Exact Gemini model identifier, prompt template, generation parameters, output schema, timeout/retry behavior, and citation validation are **TBD**. Read the Gemini API key from an environment variable; the exact variable name is **TBD**.
-- **Citation validation:** Every factual answer includes plan name and SBC section, plus page when available. The server validates that citations refer to evidence supplied to the answer step; unsupported claims are rejected or converted to abstention.
-
-Confidence thresholds are **TBD**; the initial evidence gate is provenance-based and must abstain whenever supporting evidence is missing or conflicting.
-
-## Data and interfaces
-
-### Source document and chunk records
-
-Each indexed chunk must retain:
-
-- Stable document and plan identity, including plan name and type; source URL when available, otherwise the supplied filename/delivery context.
-- Chunk text and stable chunk identity.
-- Section heading and page number when available.
-- Table context sufficient to interpret each row, with rows never split across chunks.
-
-Exact field names and serialization are **TBD**, but provenance is required for citations and extraction auditability.
-
-### Structured benefit record
-
-Each extracted benefit record must include:
-
-- Plan/document identity.
-- Benefit category and extracted value as represented in the SBC.
-- Source section and page when available.
-- Extraction status so missing, unreadable, or unverified values cannot be mistaken for zero or a confirmed value.
-
-The initial benefit categories are deductible, ER cost sharing, copays, and out-of-pocket maximum. Detailed field taxonomy and storage technology are **TBD**.
-
-### Logical request and response
+## Retrieval and question-answer flow
 
 ```text
-Authenticated question request
-  credential: provider-defined (TBD)
-  question: natural-language text
-
-Answer response
-  status: answered | insufficient_evidence | clarification_needed
-  answer: concise response when supported
-  citations: plan, SBC section, page when available
+Browser -> Firebase sign-in -> ID token -> FastAPI
+  -> verify token and (for admin routes) admin claim
+  -> resolve requested plan(s); ask clarification if ambiguous
+  -> numerical question: query verified structured benefit records
+  -> broader coverage question: retrieve using BM25 and/or FAISS semantic search (query embedding generated locally by FastAPI)
+  -> verify source support, plan match, consistency, and usable provenance
+  -> insufficient/ambiguous/conflicting evidence: abstain or clarify
+  -> otherwise deterministic formatting (initial implementation; optional Gemini phrasing only in a later phase)
+  -> validate answer citations against supporting records
+  -> response with answer/status/citations/diagnostics
 ```
 
-Transport, endpoint names, concrete JSON types, error codes, and streaming behavior are **TBD**. These logical fields describe required behavior, not a finalized wire contract.
+BM25 and FAISS semantic search run independently in evaluation across both chunking strategies. The authenticated evaluation playground lets a user explicitly select a retrieval method and chunking strategy to compare behavior. Detailed rank/score output is admin-only; all users may see selected method/strategy, plan resolution, citations, and answered/abstained status. Ordinary query mode uses the configuration selected from measured results; runtime fusion is not assumed. Numerical comparisons use structured verified records as their source of truth and may use retrieved SBC rows as corroboration. Comparisons must preserve comparable dimensions (e.g. in-network vs out-of-network, individual vs family). If dimensions differ or are unclear, explain the distinction or abstain rather than collapsing values.
 
-## Data flow
+Every factual answer cites plan and SBC section, adding page when available. The initial implementation has no LLM call. If Gemini is added later, the evidence gate precedes it, citations must resolve to records supplied to the phrasing step, and a post-generation check rejects unsupported claims or returns abstention.
 
-### Ingestion and indexing
+## Interface and diagnostics
 
-```text
-Six SBC PDFs
-  -> document registry
-  -> table-aware parsing and provenance
-  -> row-preserving chunking
-  -> BM25 index + local embedding/vector index
-  -> structured benefit extraction with source references
-```
+Logical API responses distinguish `answered`, `insufficient_evidence`, and `clarification_needed`, include a concise answer when supported, and carry citations. Concrete routes and wire schema are implementation details to define with the API skeleton.
 
-### Authenticated question answering
+All authenticated users see basic diagnostics: resolved plan names, answer/abstention status, cited sources, and a concise indication of the evidence path (structured lookup or retrieval). The evaluation playground exposes selectable BM25/vector and fixed-size/semantic-section-aware configurations. Admins additionally see ranked retrieved chunks, scores, parse/extraction/review status, ingestion errors, embedding/index versions, and evidence-gate details. Never expose credentials, tokens, privileged configuration, or raw internal stack traces.
 
-```text
-User -> Frontend -> authenticated request -> Application Server
-  -> validate credential
-  -> resolve plan(s)
-  -> structured benefit lookup + BM25 retrieval + semantic retrieval
-  -> evidence sufficiency / conflict check
-  -> insufficient evidence response OR LLM synthesis from supported evidence
-  -> citation validation
-  -> Frontend -> User
-```
+## Evaluation and open implementation checks
 
-### Evaluation
+Maintain 20–30 questions with verified answers and supporting source locations. Measure all four BM25/vector × fixed-size/semantic-section-aware combinations independently by question type, plus extraction accuracy against manual verification, answer accuracy, latency, and token usage if an LLM is used. Document actual results and limitations in README; do not invent baselines.
 
-```text
-20–30 labeled questions + verified expected answers
-  -> BM25 run / semantic run / answer pipeline
-  -> retrieval and answer accuracy, extraction accuracy,
-     latency, and token usage report
-```
+Before relying on the design, verify: the six documents are valid public SBCs with HMO/PPO/HDHP coverage; the deployed API can build/refresh its in-memory FAISS index from approved embedding records in Neon; chosen sentence-transformer model size/startup fits local ingestion; Neon storage fits PDFs plus derived data; Render/Firebase/Neon no-card plans remain available to the account; and upload/admin/local-ingestion-to-review flow works end to end.
 
-## Evaluation and operational decisions
-
-- Keep expected answers and source references for the evaluation questions so retrieval and extraction can be checked against the SBCs.
-- Compare BM25 and semantic retrieval independently and summarize results by question type.
-- Measure answer and extraction accuracy, per-query latency, and token usage. Numeric pass thresholds are **TBD**; record baseline results for the demo.
-- Re-ingestion/versioning behavior, database provider and vector support, persistence, logging, query retention, hosting, and operational monitoring are **TBD**.
-
-## Remaining implementation decisions
-
-- Authentication provider and whether access uses individual accounts or shared demo credentials.
-- PDF parser, local embedding model, database provider/vector support, and structured record storage.
-- Exact chunk settings and any retrieval fusion/reranking based on evaluation results.
-- Gemini model identifier and UI framework.
-- Concrete API schema, citation display format, confidence threshold, latency target, and deployment/query-retention policies.
+The qualifying six-document corpus is an open final-acceptance and representative-evaluation prerequisite, but it does not block building the application skeleton or ingestion pipeline with clearly labeled candidates/fixtures. Remaining implementation settings (API routes, table schema, chunk sizes, retrieval top-k, evidence thresholds, upload byte limit, and model/version measurements) should be set during implementation/evaluation and recorded without weakening provenance or abstention requirements.

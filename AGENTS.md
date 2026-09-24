@@ -1,6 +1,6 @@
 # Coding Agent Guidelines
 
-> **Initialization snapshot:** These repository files describe the initial project state. The implementation stack and other technology choices are provisional/TBD and are not finalized. Preserve the PRD requirements while evaluating choices; update this note when decisions are approved and implemented.
+These repository files record current requirements and selected technology decisions. Preserve the PRD and approved stack; update this note when requirements or decisions change.
 
 ## Project purpose
 
@@ -18,8 +18,9 @@ Build a demo that answers questions about health benefit plans using exactly six
 
 - Treat `PRD.md` as the canonical, durable statement of the project brief. Before adding or changing behavior, check it and `ARCHITECTURE.md`/`PLAN.md` for alignment.
 - Do not silently omit or replace a project-brief requirement. If a requirement is ambiguous, conflicts with the current design, or appears infeasible, explain the discrepancy to the user and mark it **TBD** in the relevant planning document until resolved.
-- Keep the core constraints visible in implementation: exactly six verified public SBCs; table-preserving parsing/chunking with provenance; both BM25 and local sentence-transformer embeddings; structured benefit extraction; Gemini API only for final answer synthesis; citations and abstention; authentication; and 20–30-question evaluation.
-- Do not substitute hosted embeddings, managed file-search RAG, or a different LLM role without an explicit user-approved change to the PRD.
+- Keep the core constraints visible in implementation: exactly six verified public SBCs; aim for HMO/PPO/HDHP coverage while treating the currently missing HDHP SBC as an open corpus gap, not a prerequisite to start; table-preserving parsing/chunking with provenance; BM25 and local sentence-transformer embeddings searched with FAISS; structured benefit extraction; deterministic answer formatting in the initial implementation; Gemini is explicitly deferred to a later phase and must remain an evidence-bound phrasing addition; citations and abstention; Firebase authentication with server-enforced admin roles; real admin upload/review with local ingestion; and 20–30-question evaluation.
+- Keep the roles distinct: sentence-transformers generates embeddings locally, FAISS performs local vector search, and Neon Postgres stores durable relational application data. Do not duplicate vectors in pgvector unless a later requirement justifies changing the selected vector index.
+- Do not substitute hosted embeddings or managed file-search RAG. An LLM is optional and must remain a thin final phrasing step; it may never provide unsupported benefit facts.
 
 ## Project structure
 
@@ -27,7 +28,7 @@ The repository currently contains project documentation at its root, plus receiv
 
 - `AGENTS.md` — coding-agent instructions.
 - `PRD.md` — product requirements and constraints.
-- `PLAN.md` — implementation plan and progress tracking; to be written after this file.
+- `PLAN.md` — implementation plan and progress tracking.
 - `ARCHITECTURE.md` — architecture, component responsibilities, flows, and unresolved decisions.
 - `README.md` — project setup and usage; keep it updated as implementation is added.
 
