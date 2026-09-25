@@ -7,7 +7,7 @@ import json
 import hashlib
 import time
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 import firebase_admin
 from dotenv import load_dotenv
@@ -21,6 +21,7 @@ from psycopg.rows import dict_row
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 from app.benefits import extract_candidates
+from app.answering import answer_question
 from app.ingestion import parse_pdf
 from app.retrieval import EmbeddingDataError, MODEL_NAME, MODEL_VERSION, model_fingerprint, retrieve
 
@@ -89,25 +90,36 @@ def database_connection():
 
 class ChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
+    context_plan_ids: list[int] = Field(default_factory=list, max_length=12)
+    previous_question: str | None = Field(default=None, max_length=2000)
+
+
+class AnswerPreviewRequest(ChatRequest):
+    method: Literal["bm25", "semantic"]
+    chunk_strategy: Literal["fixed_size", "section_aware"]
 
 
 class Citation(BaseModel):
     plan: str
     section: str
     page: int | None = None
+    document: str | None = None
 
 
 class ChatResponse(BaseModel):
     status: Literal["answered", "insufficient_evidence", "clarification_needed"]
     answer: str
     citations: list[Citation]
-    debug: dict[str, str]
+    matched_plans: list[str] = Field(default_factory=list)
+    context_plan_ids: list[int] = Field(default_factory=list)
+    debug: dict[str, Any]
 
 
 class BenefitReview(BaseModel):
     verification_status: Literal["pending_review", "verified", "missing", "ambiguous", "conflicting"]
     value_text: str | None = Field(default=None, max_length=4000)
     dimensions: dict[str, str] = Field(default_factory=dict)
+    source_section: str | None = Field(default=None, max_length=240)
 
 
 class ExtractBenefitsRequest(BaseModel):
@@ -355,23 +367,84 @@ def run_evaluation(
             "model_initialization_ms": initialization_ms, "results": matrix}
 
 
+@app.get("/api/plans")
+def approved_plans(
+    _user: Annotated[dict, Depends(require_user)],
+    connection: Annotated[psycopg.Connection, Depends(database_connection)],
+) -> list[dict]:
+    return [dict(row) for row in connection.execute(
+        """SELECT DISTINCT p.plan_id, p.insurer, p.plan_name, p.plan_type, p.coverage_type,
+                  p.plan_year
+           FROM plans p JOIN documents d USING (plan_id)
+           WHERE d.review_status = 'approved' AND d.corpus_status <> 'ineligible'
+           ORDER BY p.insurer, p.plan_name, p.plan_id"""
+    ).fetchall()]
+
+
 @app.post("/api/chat", response_model=ChatResponse)
-def chat(_user: Annotated[dict, Depends(require_user)], request: ChatRequest) -> ChatResponse:
-    """Return a safe placeholder until verified documents and retrieval are implemented."""
-    _ = request
-    return ChatResponse(
-        status="insufficient_evidence",
-        answer=(
-            "I can’t establish an answer from verified SBC documents yet. "
-            "The supplied PDFs are candidate documents and have not been approved as the answer corpus."
-        ),
-        citations=[],
-        debug={
-            "evidence_path": "not_configured",
-            "corpus": "no verified SBCs loaded",
-            "answer_mode": "deterministic placeholder; no model call",
-        },
-    )
+def chat(
+    request: ChatRequest,
+    user: Annotated[dict, Depends(require_user)],
+    connection: Annotated[psycopg.Connection, Depends(database_connection)],
+) -> ChatResponse:
+    """Answer only from approved documents and reviewer-verified numerical facts."""
+    try:
+        result = answer_question(connection, request.question, request.context_plan_ids,
+                                 request.previous_question, admin=user.get("admin") is True)
+    except EmbeddingDataError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (ImportError, OSError) as exc:
+        raise HTTPException(status_code=503, detail=f"Retrieval dependency/model unavailable: {type(exc).__name__}.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return ChatResponse.model_validate(result)
+
+
+@app.post("/api/admin/answer/preview", response_model=ChatResponse)
+def answer_preview(
+    request: AnswerPreviewRequest,
+    _admin: Annotated[dict, Depends(require_admin)],
+    connection: Annotated[psycopg.Connection, Depends(database_connection)],
+) -> ChatResponse:
+    try:
+        result = answer_question(connection, request.question, request.context_plan_ids,
+                                 request.previous_question, admin=True,
+                                 method_override=request.method,
+                                 strategy_override=request.chunk_strategy)
+    except EmbeddingDataError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (ImportError, OSError) as exc:
+        raise HTTPException(status_code=503, detail=f"Retrieval dependency/model unavailable: {type(exc).__name__}.") from exc
+    return ChatResponse.model_validate(result)
+
+
+@app.get("/api/admin/answer-health")
+def answer_health(
+    _admin: Annotated[dict, Depends(require_admin)],
+    connection: Annotated[psycopg.Connection, Depends(database_connection)],
+) -> dict:
+    documents = connection.execute(
+        "SELECT review_status, count(*) AS count FROM documents GROUP BY review_status ORDER BY review_status"
+    ).fetchall()
+    pages = connection.execute(
+        "SELECT parse_status, count(*) AS count FROM document_pages GROUP BY parse_status ORDER BY parse_status"
+    ).fetchall()
+    benefits = connection.execute(
+        "SELECT verification_status, count(*) AS count FROM benefit_records GROUP BY verification_status ORDER BY verification_status"
+    ).fetchall()
+    chunks = connection.execute(
+        """SELECT c.chunk_strategy, count(*) AS chunk_count,
+                  count(e.embedding_id) AS embedding_count
+           FROM chunks c JOIN documents d USING (document_id)
+           LEFT JOIN chunk_embeddings e ON e.chunk_id = c.chunk_id
+             AND e.model_name = %s AND e.model_version = %s
+           WHERE d.review_status = 'approved' AND d.corpus_status <> 'ineligible'
+           GROUP BY c.chunk_strategy ORDER BY c.chunk_strategy""", (MODEL_NAME, MODEL_VERSION)
+    ).fetchall()
+    return {"documents": [dict(row) for row in documents], "pages": [dict(row) for row in pages],
+            "benefits": [dict(row) for row in benefits], "approved_chunks": [dict(row) for row in chunks],
+            "embedding_model": MODEL_NAME, "embedding_version": MODEL_VERSION,
+            "note": "Embedding counts reflect model name/version; the retrieval path also checks the model fingerprint."}
 
 
 @app.get("/api/admin/benefits")
@@ -584,9 +657,11 @@ def review_benefit(
 ) -> dict:
     row = connection.execute(
         """UPDATE benefit_records SET value_text = %s, dimensions = %s,
+                   source_section = COALESCE(%s, source_section),
                    verification_status = %s, reviewer_firebase_uid = %s, reviewed_at = now()
            WHERE benefit_id = %s RETURNING benefit_id, verification_status, value_text, dimensions""",
         (review.value_text, psycopg.types.json.Jsonb(review.dimensions),
+         review.source_section.strip() if review.source_section and review.source_section.strip() else None,
          review.verification_status, admin.get("uid"), benefit_id),
     ).fetchone()
     if not row:

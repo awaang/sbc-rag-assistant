@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type Dispatch, type FormEvent, type KeyboardEvent, type SetStateAction } from "react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
@@ -15,8 +15,10 @@ import { Textarea } from "./components/ui/textarea";
 type ChatResult = {
   status: "answered" | "insufficient_evidence" | "clarification_needed";
   answer: string;
-  citations: Array<{ plan: string; section: string; page?: number | null }>;
-  debug: Record<string, string>;
+  citations: Array<{ plan: string; section: string; page?: number | null; document?: string | null }>;
+  matched_plans: string[];
+  context_plan_ids: number[];
+  debug: Record<string, unknown>;
 };
 
 type ChatTurn = {
@@ -62,12 +64,18 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [activePage, setActivePage] = useState<Page>("chat");
+  const chatEpoch = useRef(0);
+  const chatRequest = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!firebaseAuth) return;
     return onAuthStateChanged(firebaseAuth, async (nextUser) => {
       setUser(nextUser);
       if (!nextUser) {
+        chatEpoch.current += 1;
+        chatRequest.current?.abort();
+        chatRequest.current = null;
+        setLoading(false);
         setIsAdmin(false);
         setActivePage("chat");
         setChatTurns([]);
@@ -106,6 +114,10 @@ export default function App() {
     const submittedQuestion = question.trim();
     if (!user || !submittedQuestion || loading) return;
     const turnId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const lastTurn = [...chatTurns].reverse().find((turn) => turn.response);
+    const epoch = chatEpoch.current;
+    const controller = new AbortController();
+    chatRequest.current = controller;
     setChatTurns((turns) => [...turns, { id: turnId, question: submittedQuestion }]);
     setQuestion("");
     setLoading(true);
@@ -114,22 +126,38 @@ export default function App() {
       const response = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ question: submittedQuestion }),
+        body: JSON.stringify({ question: submittedQuestion,
+          context_plan_ids: lastTurn?.response?.context_plan_ids || [],
+          ...(lastTurn?.response ? { previous_question: lastTurn.question } : {}) }),
+        signal: controller.signal,
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => null);
         throw new Error(payload?.detail || `Request failed (${response.status}).`);
       }
       const answer = (await response.json()) as ChatResult;
-      if (firebaseAuth?.currentUser?.uid !== user.uid) return;
+      if (chatEpoch.current !== epoch || firebaseAuth?.currentUser?.uid !== user.uid) return;
       setChatTurns((turns) => turns.map((turn) => turn.id === turnId ? { ...turn, response: answer } : turn));
     } catch (error) {
+      if (controller.signal.aborted) return;
       const message = error instanceof Error ? error.message : "Could not reach the API. Check that it is running.";
-      if (firebaseAuth?.currentUser?.uid !== user.uid) return;
+      if (chatEpoch.current !== epoch || firebaseAuth?.currentUser?.uid !== user.uid) return;
       setChatTurns((turns) => turns.map((turn) => turn.id === turnId ? { ...turn, error: message } : turn));
     } finally {
-      setLoading(false);
+      if (chatEpoch.current === epoch) {
+        chatRequest.current = null;
+        setLoading(false);
+      }
     }
+  }
+
+  function startNewChat() {
+    chatEpoch.current += 1;
+    chatRequest.current?.abort();
+    chatRequest.current = null;
+    setChatTurns([]);
+    setQuestion("");
+    setLoading(false);
   }
 
   if (!firebaseConfigured) {
@@ -189,8 +217,8 @@ export default function App() {
       </header>
 
       <section className={`app-content ${page === "chat" ? "chat-content" : ""}`}>
-        {page === "chat" && <ChatPage question={question} setQuestion={setQuestion} handleSubmit={handleSubmit} loading={loading} turns={chatTurns} setTurns={setChatTurns} isAdmin={isAdmin} />}
-        {page === "plans" && <PlansPage isAdmin={isAdmin} />}
+        {page === "chat" && <ChatPage question={question} setQuestion={setQuestion} handleSubmit={handleSubmit} loading={loading} turns={chatTurns} onNewChat={startNewChat} isAdmin={isAdmin} />}
+        {page === "plans" && <PlansPage user={user} isAdmin={isAdmin} />}
         {page === "documents" && isAdmin && <DocumentsPage user={user} />}
         {page === "benefits" && isAdmin && <BenefitsReviewPage user={user} />}
         {page === "playground" && isAdmin && <RetrievalPlayground user={user} />}
@@ -256,7 +284,7 @@ function BenefitsReviewPage({ user }: { user: User }) {
     }
     setBusy(true); setError("");
     try {
-      await api(`/api/admin/benefits/${row.benefit_id}`, { method: "PATCH", body: JSON.stringify({ value_text: values.get("value_text") || null, verification_status: values.get("verification_status"), dimensions }) });
+      await api(`/api/admin/benefits/${row.benefit_id}`, { method: "PATCH", body: JSON.stringify({ value_text: values.get("value_text") || null, source_section: values.get("source_section") || null, verification_status: values.get("verification_status"), dimensions }) });
       setMessage("Review saved."); await refresh();
     } catch (e) { setError(e instanceof Error ? e.message : "Could not save review."); }
     finally { setBusy(false); }
@@ -268,7 +296,7 @@ function BenefitsReviewPage({ user }: { user: User }) {
       {documents.map((doc) => <div className="flex flex-wrap items-center justify-between gap-3 border-b py-3" key={doc.document_id}><span>{doc.plan_name || doc.original_filename} · {doc.parsed_pages} pages · {doc.corpus_status}</span><Button disabled={busy || !doc.parsed_pages} onClick={() => void extract(doc.document_id)}>Extract candidates</Button></div>)}
       {!documents.length && <p className="py-3 text-sm text-muted-foreground">No documents are available. Complete document ingestion first.</p>}
     </CardContent></Card>
-    <div className="mt-5 space-y-3">{rows.map((row) => <Card key={row.benefit_id}><CardContent className="p-5"><div className="mb-3 flex flex-wrap justify-between gap-2"><strong>{row.plan_name} · {row.category.replace(/_/g, " ")}</strong><span className="text-xs text-muted-foreground">{row.original_filename} · {row.source_section || "Section unavailable"}{row.page_number ? ` · page ${row.page_number}` : ""} · {row.corpus_status}</span></div><form onSubmit={(event) => { event.preventDefault(); void save(row, event.currentTarget); }} className="grid gap-3 lg:grid-cols-[1fr_1fr_180px_auto]"><label className="field-label">Source wording / corrected value<textarea className="text-input min-h-20" name="value_text" defaultValue={row.value_text || ""} /></label><label className="field-label">Dimensions (JSON)<textarea className="text-input min-h-20 font-mono text-xs" name="dimensions" defaultValue={JSON.stringify(row.dimensions || {}, null, 2)} /></label><label className="field-label">Review status<select className="text-input" name="verification_status" defaultValue={row.verification_status}><option value="pending_review">Pending review</option><option value="verified">Verified</option><option value="missing">Missing</option><option value="ambiguous">Ambiguous</option><option value="conflicting">Conflicting</option></select></label><div className="self-end"><Button type="submit" disabled={busy}>Save review</Button></div></form></CardContent></Card>)}</div>
+    <div className="mt-5 space-y-3">{rows.map((row) => <Card key={row.benefit_id}><CardContent className="p-5"><div className="mb-3 flex flex-wrap justify-between gap-2"><strong>{row.plan_name} · {row.category.replace(/_/g, " ")}</strong><span className="text-xs text-muted-foreground">{row.original_filename} · {row.source_section || "Section unavailable"}{row.page_number ? ` · page ${row.page_number}` : ""} · {row.corpus_status}</span></div><form onSubmit={(event) => { event.preventDefault(); void save(row, event.currentTarget); }} className="grid gap-3 lg:grid-cols-[1fr_1fr_180px_auto]"><label className="field-label">Source wording / corrected value<textarea className="text-input min-h-20" name="value_text" defaultValue={row.value_text || ""} /></label><label className="field-label">Source section<input className="text-input" name="source_section" maxLength={240} defaultValue={row.source_section || ""} /></label><label className="field-label">Dimensions (JSON)<textarea className="text-input min-h-20 font-mono text-xs" name="dimensions" defaultValue={JSON.stringify(row.dimensions || {}, null, 2)} /></label><label className="field-label">Review status<select className="text-input" name="verification_status" defaultValue={row.verification_status}><option value="pending_review">Pending review</option><option value="verified">Verified</option><option value="missing">Missing</option><option value="ambiguous">Ambiguous</option><option value="conflicting">Conflicting</option></select></label><div className="self-end"><Button type="submit" disabled={busy}>Save review</Button></div></form></CardContent></Card>)}</div>
   </div>;
 }
 
@@ -338,13 +366,13 @@ function DocumentsPage({ user }: { user: User }) {
   </div>;
 }
 
-function ChatPage({ question, setQuestion, handleSubmit, loading, turns, setTurns, isAdmin }: {
+function ChatPage({ question, setQuestion, handleSubmit, loading, turns, onNewChat, isAdmin }: {
   question: string;
   setQuestion: (value: string) => void;
   handleSubmit: (event: FormEvent) => void;
   loading: boolean;
   turns: ChatTurn[];
-  setTurns: Dispatch<SetStateAction<ChatTurn[]>>;
+  onNewChat: () => void;
   isAdmin: boolean;
 }) {
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -353,12 +381,6 @@ function ChatPage({ question, setQuestion, handleSubmit, loading, turns, setTurn
   useEffect(() => {
     transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: "smooth" });
   }, [turns, loading]);
-
-  function startNewChat() {
-    if (loading) return;
-    setTurns([]);
-    setQuestion("");
-  }
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -371,7 +393,7 @@ function ChatPage({ question, setQuestion, handleSubmit, loading, turns, setTurn
     <div className="chat-page">
       <div className="chat-toolbar">
         <div><div className="chat-toolbar-title">SBC Assistant</div><div className="chat-toolbar-subtitle">Answers grounded in plan documents</div></div>
-        <Button variant="outline" className="new-chat-button" onClick={startNewChat} disabled={loading}>+ <span>New chat</span></Button>
+        <Button variant="outline" className="new-chat-button" onClick={onNewChat}>+ <span>New chat</span></Button>
       </div>
 
       <div className="transcript-scroll" ref={transcriptRef} role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions">
@@ -416,8 +438,8 @@ function ConversationTurn({ turn, isAdmin, loading }: { turn: ChatTurn; isAdmin:
           {turn.response && <details className="debug-details">
             <summary><span>{isAdmin ? "Debug details" : "Answer details"}</span><span className="debug-hint">Evidence path &amp; request status</span></summary>
             <pre>{JSON.stringify(isAdmin
-              ? { status: turn.response.status, citations: turn.response.citations, ...turn.response.debug }
-              : { status: turn.response.status, citations: turn.response.citations, evidence_path: turn.response.debug.evidence_path }, null, 2)}</pre>
+              ? { status: turn.response.status, matched_plans: turn.response.matched_plans, citations: turn.response.citations, ...turn.response.debug }
+              : { status: turn.response.status, matched_plans: turn.response.matched_plans, citations: turn.response.citations, evidence_path: turn.response.debug.evidence_path, corpus: turn.response.debug.corpus }, null, 2)}</pre>
           </details>}
         </div>
       </div>
@@ -425,16 +447,41 @@ function ConversationTurn({ turn, isAdmin, loading }: { turn: ChatTurn; isAdmin:
   );
 }
 
-function PlansPage({ isAdmin }: { isAdmin: boolean }) {
+type ApprovedPlan = { plan_id: number; insurer: string; plan_name: string; plan_type: string; coverage_type: string; plan_year: number | null };
+
+function PlansPage({ user, isAdmin }: { user: User; isAdmin: boolean }) {
+  const [plans, setPlans] = useState<ApprovedPlan[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const token = await user.getIdToken();
+        const response = await fetch(`${API_BASE}/api/plans`, { headers: { Authorization: `Bearer ${token}` } });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || `Request failed (${response.status}).`);
+        if (active) setPlans(payload);
+      } catch (err) {
+        if (active) setError(err instanceof Error ? err.message : "Could not load plans.");
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+    return () => { active = false; };
+  }, [user]);
   return (
     <div className="content-page">
-      <PageHeading eyebrow="PLAN LIBRARY" title="Plans" description="Browse the plans available in the approved document collection." />
-      <Card><CardContent className="empty-state">
+      <PageHeading eyebrow="PLAN LIBRARY" title="Plans" description="Reviewed documents available for provisional answers. SBC and public-source status remain unverified." />
+      {error && <p role="alert" className="chat-error">{error}</p>}
+      {loading ? <p>Loading plans…</p> : plans.length > 0 ? <div className="grid gap-3 md:grid-cols-2">{plans.map((plan) =>
+        <Card key={plan.plan_id}><CardContent className="p-5"><h2 className="font-semibold">{plan.insurer} {plan.plan_name}</h2><p className="mt-2 text-sm text-muted-foreground">{plan.coverage_type} · {plan.plan_type} · {plan.plan_year || "year unknown"}</p><p className="mt-2 text-xs text-muted-foreground">Approved for provisional use; SBC/public-source status unverified.</p></CardContent></Card>
+      )}</div> : <Card><CardContent className="empty-state">
         <div className="empty-mark"><Icon name="book" /></div>
         <h2>No approved plans yet</h2>
         <p>Plan details will appear here after source documents have been reviewed and approved.</p>
         {isAdmin && <div className="admin-notice"><strong>Admin workspace</strong><span>Use Documents in the navigation to upload PDFs, run the local parser, and review parsed evidence.</span></div>}
-      </CardContent></Card>
+      </CardContent></Card>}
     </div>
   );
 }
@@ -445,6 +492,7 @@ function RetrievalPlayground({ user }: { user: User }) {
   const [strategy, setStrategy] = useState("fixed_size");
   const [planId, setPlanId] = useState(""); const [documentId, setDocumentId] = useState(""); const [section, setSection] = useState("");
   const [result, setResult] = useState<any>(null);
+  const [answerResult, setAnswerResult] = useState<ChatResult | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   async function search(event: FormEvent) {
@@ -462,12 +510,47 @@ function RetrievalPlayground({ user }: { user: User }) {
     } catch (err) { setError(err instanceof Error ? err.message : "Retrieval request failed."); }
     finally { setBusy(false); }
   }
+  async function previewAnswer() {
+    setBusy(true); setError(""); setAnswerResult(null);
+    try {
+      const token = await user.getIdToken();
+      const response = await fetch(`${API_BASE}/api/admin/answer/preview`, {
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ question, method, chunk_strategy: strategy }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || `Request failed (${response.status}).`);
+      setAnswerResult(payload);
+    } catch (err) { setError(err instanceof Error ? err.message : "Answer preview failed."); }
+    finally { setBusy(false); }
+  }
   return <div className="content-page"><PageHeading eyebrow="ADMIN TOOLS" title="Retrieval playground" description="Search approved evidence with either method and chunking strategy. Corpus results remain provisional." />
     <Card><CardContent className="p-5"><form onSubmit={(event) => void search(event)} className="space-y-3">
       <label className="field-label">Question<textarea className="text-input min-h-20" value={question} onChange={(event) => setQuestion(event.target.value)} required maxLength={2000} /></label>
-      <div className="grid gap-3 md:grid-cols-3"><label className="field-label">Retrieval method<select className="text-input" value={method} onChange={(event) => setMethod(event.target.value)}><option value="bm25">BM25</option><option value="semantic">Semantic (FAISS)</option></select></label><label className="field-label">Chunking strategy<select className="text-input" value={strategy} onChange={(event) => setStrategy(event.target.value)}><option value="fixed_size">Fixed-size</option><option value="section_aware">Section-aware</option></select></label><label className="field-label">Plan ID (optional)<input className="text-input" type="number" min="1" value={planId} onChange={(event) => setPlanId(event.target.value)} /></label><label className="field-label">Document ID (optional)<input className="text-input" type="number" min="1" value={documentId} onChange={(event) => setDocumentId(event.target.value)} /></label><label className="field-label">Section contains (optional)<input className="text-input" value={section} onChange={(event) => setSection(event.target.value)} /></label><div className="self-end"><Button disabled={busy || !question.trim()}>{busy ? "Searching…" : "Search evidence"}</Button></div></div>
-    </form>{error && <p role="alert" className="mt-4 text-red-700">{error}</p>}{result && <div className="mt-5 space-y-3"><p className="text-sm">{result.results.length} results · {Number(result.latency_ms).toFixed(1)} ms total · {result.model_name} ({result.model_version})</p>{result.timings && <p className="text-xs text-muted-foreground">chunks {Number(result.timings.corpus_load_ms).toFixed(1)} ms · vectors {Number(result.timings.embedding_load_ms || 0).toFixed(1)} ms · index {Number(result.timings.index_build_ms).toFixed(1)} ms · query embedding {Number(result.timings.query_embedding_ms).toFixed(1)} ms · model initialization {Number(result.timings.model_load_ms).toFixed(1)} ms · search {Number(result.timings.search_ms).toFixed(1)} ms</p>}{result.index_status && <p className="text-sm text-amber-700">{result.index_status}</p>}{result.results.map((row: any) => <Card key={row.chunk_id}><CardContent className="p-4"><div className="mb-2 text-xs text-muted-foreground">#{row.rank} · score {Number(row.score).toFixed(4)} · {row.plan_name || "Plan unavailable"} · {row.original_filename} · pages {row.page_start ?? "?"}–{row.page_end ?? "?"}</div><pre className="whitespace-pre-wrap text-sm">{row.chunk_text}</pre><details className="mt-2 text-xs"><summary>Provenance</summary><pre className="whitespace-pre-wrap">{JSON.stringify(row.provenance, null, 2)}</pre></details></CardContent></Card>)}</div>}</CardContent></Card>
+      <div className="grid gap-3 md:grid-cols-3"><label className="field-label">Retrieval method<select className="text-input" value={method} onChange={(event) => setMethod(event.target.value)}><option value="bm25">BM25</option><option value="semantic">Semantic (FAISS)</option></select></label><label className="field-label">Chunking strategy<select className="text-input" value={strategy} onChange={(event) => setStrategy(event.target.value)}><option value="fixed_size">Fixed-size</option><option value="section_aware">Section-aware</option></select></label><label className="field-label">Plan ID (optional)<input className="text-input" type="number" min="1" value={planId} onChange={(event) => setPlanId(event.target.value)} /></label><label className="field-label">Document ID (optional)<input className="text-input" type="number" min="1" value={documentId} onChange={(event) => setDocumentId(event.target.value)} /></label><label className="field-label">Section contains (optional)<input className="text-input" value={section} onChange={(event) => setSection(event.target.value)} /></label><div className="self-end flex gap-2"><Button disabled={busy || !question.trim()}>{busy ? "Working…" : "Search evidence"}</Button><Button type="button" variant="outline" disabled={busy || !question.trim()} onClick={() => void previewAnswer()}>Preview answer</Button></div></div>
+      <p className="text-xs text-muted-foreground">Answer preview uses the selected method and chunk strategy for broader coverage. Plan, document, and section filters above apply to evidence search only; numeric answers always use verified benefit records.</p>
+    </form>{error && <p role="alert" className="mt-4 text-red-700">{error}</p>}{answerResult && <div className="mt-5"><Answer result={answerResult} /><details className="mt-3 text-xs"><summary>Answer diagnostics</summary><pre className="mt-2 overflow-auto rounded bg-muted p-3">{JSON.stringify({ matched_plans: answerResult.matched_plans, ...answerResult.debug }, null, 2)}</pre></details></div>}{result && <div className="mt-5 space-y-3"><p className="text-sm">{result.results.length} results · {Number(result.latency_ms).toFixed(1)} ms total · {result.model_name} ({result.model_version})</p>{result.timings && <p className="text-xs text-muted-foreground">chunks {Number(result.timings.corpus_load_ms).toFixed(1)} ms · vectors {Number(result.timings.embedding_load_ms || 0).toFixed(1)} ms · index {Number(result.timings.index_build_ms).toFixed(1)} ms · query embedding {Number(result.timings.query_embedding_ms).toFixed(1)} ms · model initialization {Number(result.timings.model_load_ms).toFixed(1)} ms · search {Number(result.timings.search_ms).toFixed(1)} ms</p>}{result.index_status && <p className="text-sm text-amber-700">{result.index_status}</p>}{result.results.map((row: any) => <Card key={row.chunk_id}><CardContent className="p-4"><div className="mb-2 text-xs text-muted-foreground">#{row.rank} · score {Number(row.score).toFixed(4)} · {row.plan_name || "Plan unavailable"} · {row.original_filename} · pages {row.page_start ?? "?"}–{row.page_end ?? "?"}</div><pre className="whitespace-pre-wrap text-sm">{row.chunk_text}</pre><details className="mt-2 text-xs"><summary>Provenance</summary><pre className="whitespace-pre-wrap">{JSON.stringify(row.provenance, null, 2)}</pre></details></CardContent></Card>)}</div>}</CardContent></Card>
+    <AnswerHealth user={user} />
   </div>;
+}
+
+function AnswerHealth({ user }: { user: User }) {
+  const [health, setHealth] = useState<any>(null);
+  const [error, setError] = useState("");
+  async function refresh() {
+    try {
+      const token = await user.getIdToken();
+      const response = await fetch(`${API_BASE}/api/admin/answer-health`, { headers: { Authorization: `Bearer ${token}` } });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || `Request failed (${response.status}).`);
+      setHealth(payload); setError("");
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not load answer health."); }
+  }
+  useEffect(() => { void refresh(); }, [user]);
+  return <Card className="mt-5"><CardContent className="p-5"><div className="flex items-center justify-between gap-3"><h2 className="font-semibold">Answer evidence health</h2><Button variant="outline" onClick={() => void refresh()}>Refresh</Button></div>
+    {error && <p role="alert" className="chat-error">{error}</p>}
+    {health && <div className="mt-3 space-y-2 text-sm"><p>Documents: {health.documents.map((row: any) => `${row.review_status} ${row.count}`).join(" · ") || "none"}</p><p>Parsed pages: {health.pages.map((row: any) => `${row.parse_status} ${row.count}`).join(" · ") || "none"}</p><p>Benefits: {health.benefits.map((row: any) => `${row.verification_status} ${row.count}`).join(" · ") || "none"}</p><p>Approved chunks / model-version embeddings: {health.approved_chunks.map((row: any) => `${row.chunk_strategy} ${row.chunk_count}/${row.embedding_count}`).join(" · ") || "none"}</p><p className="text-xs text-muted-foreground">{health.embedding_model} · {health.embedding_version}. {health.note}</p></div>}
+  </CardContent></Card>;
 }
 
 function EvaluationPage({ user }: { user: User }) {
@@ -524,7 +607,7 @@ function Answer({ result }: { result: ChatResult }) {
       <div className="answer-heading"><span className={`answer-indicator ${result.status}`} />
         <div><p className="eyebrow">{result.status === "answered" ? "ANSWER" : result.status === "clarification_needed" ? "CLARIFICATION NEEDED" : "INSUFFICIENT EVIDENCE"}</p><p className="mt-2 text-sm leading-6 text-foreground">{result.answer}</p></div>
       </div>
-      {result.citations.length > 0 && <div className="citation-list"><p className="eyebrow">SOURCES</p>{result.citations.map((citation, index) => <div className="citation" key={`${citation.plan}-${index}`}><Icon name="book" /><span><strong>{citation.plan}</strong> · {citation.section}{citation.page ? ` · p. ${citation.page}` : ""}</span></div>)}</div>}
+      {result.citations.length > 0 && <div className="citation-list"><p className="eyebrow">SOURCES</p>{result.citations.map((citation, index) => <div className="citation" key={`${citation.plan}-${index}`}><Icon name="book" /><span><strong>{citation.plan}</strong> · {citation.section}{citation.page ? ` · p. ${citation.page}` : ""}{citation.document ? ` · ${citation.document}` : ""}</span></div>)}</div>}
     </section>
   );
 }

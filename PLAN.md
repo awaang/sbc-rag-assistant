@@ -1,6 +1,6 @@
 # Implementation Plan: SBC RAG Demo
 
-This plan records the agreed technology direction and tracks implementation. The six received PDFs are approved as a provisional development/evaluation corpus, but remain unverified as SBCs and as publicly sourced documents. Phase 1's local frontend/API scaffold, Firebase auth foundation, initial Neon schema migration, and Render Blueprint are implemented. Phase 2 upload, local parsing, chunking, and inspection workflows are implemented; real database ingestion and corpus review remain to be run. Phase 3 benefit extraction and review scaffolding is implemented on top of parsed pages.
+This plan records the agreed technology direction and tracks implementation. The six received PDFs are approved as a provisional development/evaluation corpus, but remain unverified as SBCs and as publicly sourced documents. Phase 1's local frontend/API scaffold, Firebase auth foundation, initial Neon schema migration, and Render Blueprint are implemented. Phase 2 upload, local parsing, chunking, and inspection workflows are implemented; real database ingestion and corpus review remain to be run. Phase 3 benefit extraction and review scaffolding is implemented on top of parsed pages. Phase 4 retrieval and evaluation tooling is implemented, while labeled runs remain pending. Phase 5's deterministic answer and session-only follow-up flow is implemented in code; end-to-end corpus review and measured answer quality remain pending.
 
 ## Selected stack
 
@@ -8,7 +8,7 @@ This plan records the agreed technology direction and tracks implementation. The
 - **Frontend:** React + TypeScript with shadcn/ui; serve as a Render static site and call the FastAPI API.
 - **Authentication/roles:** Firebase Authentication on the no-cost Spark plan for email/password or social login. FastAPI verifies ID tokens for every protected request. A local one-time admin bootstrap command assigns Firebase custom claims; no public self-promotion endpoint.
 - **Persistent data:** Neon Postgres Free for plan/document metadata, uploaded PDF bytes, parsed pages/rows/chunks, verified structured benefit records, provenance, ingestion state, and evaluation results. Use ordinary SQL access through a repository/data-access layer; do not expose Neon credentials to the browser.
-- **Semantic retrieval:** Generate document embeddings with `sentence-transformers/all-MiniLM-L6-v2` in the local ingestion CLI and query embeddings in the FastAPI process, using the same configurable model version. Persist approved document embedding values as ordinary per-chunk data in Neon; Neon does not perform vector search and pgvector is not used. The API builds an in-memory FAISS index from approved embeddings at startup and refreshes it after approval changes. No embedding API or shared filesystem is required. Verify that the selected Render service can load the model and index within its memory/startup limits.
+- **Semantic retrieval:** Generate document embeddings with `sentence-transformers/all-MiniLM-L6-v2` in the local ingestion CLI and query embeddings in the FastAPI process, using the same configurable model version. Persist approved document embedding values as ordinary per-chunk data in Neon; Neon does not perform vector search and pgvector is not used. The API currently builds an in-memory FAISS index for each semantic request, so approval changes apply on the next search. A startup cache may be added after latency and memory measurements. No embedding API or shared filesystem is required. Verify that the selected Render service can load the model and index within its memory/startup limits.
 - **Keyword retrieval:** `rank-bm25` over the same canonical chunks, independently measurable from semantic search.
 - **PDF handling:** `pdfplumber` first; evaluate actual SBC output and add Camelot only for tables where it demonstrably improves row/cell structure.
 - **Answers, initial phase:** Deterministic formatting for structured numeric lookups and comparisons, citations, clarification, and abstention. Do not integrate Gemini in the initial implementation.
@@ -33,7 +33,7 @@ This plan records the agreed technology direction and tracks implementation. The
 ### Phase 1 — Corpus and runnable project skeleton
 
 - **Completed project setup:** Six PDFs have been received, provisionally classified in `ARCHITECTURE.md`, and recorded with available file identity/provenance fields in `data/source-documents/received/metadata.json`. Unknown metadata remains null; the files are the provisional development corpus but remain unverified as SBCs/public sources.
-- **Scaffold added:** React + TypeScript + Vite frontend with Firebase email/password registration/sign-in, admin document upload/review, benefit review, retrieval playground, and evaluation controls. Admin navigation reads the Firebase custom claim for presentation; server authorization remains authoritative. FastAPI chat currently abstains pending Phase 5 answer integration.
+- **Scaffold added:** React + TypeScript + Vite frontend with Firebase email/password registration/sign-in, admin document upload/review, benefit review, retrieval playground, and evaluation controls. Admin navigation reads the Firebase custom claim for presentation; server authorization remains authoritative. FastAPI chat now uses approved provisional evidence and verified benefit records for deterministic answers.
 - [x] Establish a small Python backend and React TypeScript frontend layout; ingestion/evaluation/test directories will be added with those phases.
 - [x] Add dependency/configuration files, local development instructions, `.env.example` containing names only, and ignores for secrets/build outputs.
 - [x] Add Firebase registration/sign-in and FastAPI ID-token verification; Neon relational schema/migration with ordinary embedding values and no pgvector; FastAPI health/API skeleton; local admin-claim bootstrap command; and Render Blueprint without embedded secrets. Protect each authenticated/admin route when it is introduced.
@@ -66,10 +66,10 @@ This plan records the agreed technology direction and tracks implementation. The
 - [x] Add conservative candidate extraction that prefers detected table rows and uses page text where tables are unavailable. Candidates remain `pending_review` (or `ambiguous` where a source row contains distinct values); this is a review aid, not an authoritative parser.
 - [x] Add admin-only API operations and a benefit review UI to extract, inspect, correct, and assign review status, with reviewer UID and timestamp.
 - [x] Add an idempotency index for repeated extraction of the same source line.
-- [ ] Verify only reviewed values and approved document evidence are queryable once the answer path is implemented in Phase 5.
+- [x] Gate answer queries on verified benefit values and approved document evidence. End-to-end corpus review remains open.
 - [ ] Measure extraction accuracy against manually verified labels for the provisional corpus, reporting it as corpus-scoped; repeat on any later qualifying SBC corpus.
 
-**Milestone:** Extraction and admin review are implemented. End-to-end answer use depends on Phase 5's evidence gate; measured accuracy must identify the provisional corpus.
+**Milestone:** Extraction and admin review are implemented, and Phase 5 now applies the review gate. Measured accuracy must identify the provisional corpus.
 
 ### Phase 4 — BM25 and semantic retrieval baselines
 
@@ -78,23 +78,24 @@ This plan records the agreed technology direction and tracks implementation. The
 - [ ] Create 20–30 evaluation questions with manually checked expected evidence locations, answer labels, and question types drawn from the six provisional documents; label results provisional and corpus-scoped. The manifest and runner are in place, but labels must be authored after reviewing actual ingested documents.
 - [x] Implement four-combination evaluation over the same manifest and persist aggregate/per-question metrics without retaining question text.
 - [x] Add an admin-only evaluation playground for selecting BM25 or semantic search and fixed-size or semantic/section-aware chunks, plus detailed ranked evidence traces.
-- [x] Record latency and retrieval scores per question/configuration; select runtime retrieval behavior from measured results, retaining both methods for comparison. Runtime selection remains pending actual labeled runs.
+- [x] Record latency and retrieval scores per question/configuration, retaining both methods for comparison.
+- [ ] Select runtime retrieval behavior from measured results. Ordinary chat temporarily defaults to BM25 with section-aware chunks until labeled runs exist.
 
 **Milestone:** Retrieval, playground, and reproducible evaluation runner are implemented. Provisional retrieval findings remain pending reviewed parser output, the 20–30 manually labeled questions, and actual runs.
 
 ### Phase 5 — Authenticated answer flow and diagnostics
 
-- [ ] Confirm Firebase token verification on every protected FastAPI request and admin custom claims on every upload/review/ingestion-management endpoint; these checks are implemented alongside the endpoints and covered here with authorization review.
-- [ ] Complete the session-only, multi-turn ChatGPT-style conversation. The roomy transcript/composer and in-memory turn display are implemented; each question is still sent independently, so prior-turn context is not yet used by the answer API. Keep messages volatile and do not add chat-history persistence or history APIs.
-- [ ] Resolve plans and ask for clarification for ambiguous names.
-- [ ] Route numerical lookups and comparisons through verified structured records; use retrieval evidence for broader coverage questions.
-- [ ] Apply provenance/evidence gate, conflict checks, citation validation, and explicit abstention before any synthesis.
-- [ ] Implement and evaluate the complete deterministic, cited answer path without Gemini, including structured lookups, comparisons, clarification, and abstention.
-- [ ] Show basic diagnostics to all users (matched plans, evidence citations, answer/abstention status); show admins detailed retrieval ranks, extraction/parser status, and ingestion/index health.
+- [x] Require Firebase token verification on protected FastAPI requests and admin custom claims on upload/review/evaluation/diagnostic endpoints. Targeted authorization review remains open.
+- [x] Send the previous in-memory question and resolved plan IDs for short follow-ups. New chat, sign-out, and reload clear this context; no chat-history persistence or history API was added.
+- [x] Resolve approved plans and ask for clarification for ambiguous names.
+- [x] Route numerical lookups and comparisons through verified structured records; quote retrieved, provenance-bearing source rows for broader coverage questions.
+- [x] Apply approval, review, value, dimension, conflict, and citation gates with explicit clarification or abstention.
+- [x] Implement deterministic, cited answer formatting without Gemini. Measured answer accuracy remains pending the labeled manifest and reviewed corpus.
+- [x] Show basic diagnostics to all users; show admins detailed answer traces and document/parse/benefit/embedding health.
 - [ ] Use measured results to select ordinary-user defaults; retain explicit configuration selection in the evaluation playground.
 - [ ] Add tests for authentication, admin authorization, comparisons, citations, ambiguity, missing/conflicting evidence, and uploaded-document approval state.
 
-**Milestone:** Authenticated users receive supported cited answers or clear clarification/abstention, with role-appropriate diagnostics.
+**Milestone:** The Phase 5 flow is implemented in code. End-to-end review against actual ingested documents, targeted tests, and measured answer accuracy remain open before treating the milestone as validated.
 
 ### Phase 6 — Deployment, evaluation, and documentation
 
