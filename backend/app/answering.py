@@ -180,7 +180,8 @@ def _numeric_answer(connection, question: str, plans: list[dict], category: str,
     selected = []
     reasons = []
     for plan in plans:
-        candidates = [row for row in rows if row["plan_id"] == plan["plan_id"]]
+        plan_candidates = [row for row in rows if row["plan_id"] == plan["plan_id"]]
+        candidates = plan_candidates
         if requested:
             candidates = [row for row in candidates if all(
                 (key == "network" and _dimensions(row)[0] == wanted) or
@@ -191,7 +192,16 @@ def _numeric_answer(connection, question: str, plans: list[dict], category: str,
         verified = [row for row in candidates if row["verification_status"] == "verified"]
         if any(row["verification_status"] == "conflicting" for row in candidates):
             reasons.append(f"{_display(plan)} has conflicting reviewed values")
-        elif any(row["verification_status"] in {"pending_review", "ambiguous"} for row in candidates):
+        elif any(
+                row["verification_status"] in {"pending_review", "ambiguous"}
+                and all(
+                    key not in requested or _dimensions(row)[index] in {wanted, "unspecified"}
+                    for key, wanted, index in (("network", requested.get("network"), 0),
+                                               ("scope", requested.get("scope"), 1))
+                    if wanted is not None
+                )
+                and (not requested_service or _dimensions(row)[2] in {requested_service, "unspecified"})
+                for row in plan_candidates):
             reasons.append(f"{_display(plan)} has unresolved benefit candidates for this question")
         elif not verified:
             reasons.append(f"{_display(plan)} has no verified value for this question")
@@ -241,6 +251,7 @@ def _numeric_answer(connection, question: str, plans: list[dict], category: str,
 
 def _source_unit(chunk: dict, terms: set[str]) -> tuple[int, dict] | None:
     best = None
+    plan_name = _fold(str(chunk.get("plan_name") or ""))
     for unit in (chunk.get("provenance") or {}).get("units", []):
         if unit.get("kind") == "table_row":
             headers = [str(value) for value in unit.get("headers") or []]
@@ -254,6 +265,17 @@ def _source_unit(chunk: dict, terms: set[str]) -> tuple[int, dict] | None:
         unit_terms = set(tokenize(wording))
         overlap = len(terms & unit_terms)
         if not section or not wording or overlap < len(terms):
+            continue
+        folded_section = _fold(str(section))
+        section_terms = set(tokenize(folded_section))
+        plan_terms = set(tokenize(plan_name)) - NAME_WORDS
+        document_title = (
+            folded_section in {"plan title", "plan summary", "summary of benefits and coverage"}
+            or ("summary" in section_terms and bool(section_terms & {"benefits", "coverage", "plan"}))
+            or folded_section.endswith(" plan")
+        )
+        if document_title or (
+                plan_terms and plan_terms.issubset(section_terms)):
             continue
         if not re.search(r"\b(covered|coverage|not covered|no charge|copay|coinsurance|deductible|limit|visit|per year)\b|\$|%", wording, re.I):
             continue

@@ -160,7 +160,7 @@ def run_retrieval(connection, request: RetrievalRequest) -> dict:
     except (ImportError, OSError) as exc:
         raise HTTPException(status_code=503, detail=f"Retrieval dependency/model unavailable: {type(exc).__name__}.") from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="Retrieval model initialization or execution failed.") from exc
+        raise HTTPException(status_code=503, detail="Retrieval model unavailable or initialization/execution failed.") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if request.method == "semantic" and result.get("index_status") == "no_approved_embeddings":
