@@ -28,12 +28,11 @@ type ChatTurn = {
   error?: string;
 };
 
-type Page = "plans" | "chat" | "documents" | "benefits" | "playground" | "evaluation" | "profile";
+type Page = "plans" | "chat" | "benefits" | "playground" | "evaluation" | "profile";
 
 const pageLabels: Record<Page, string> = {
   plans: "Plans",
   chat: "Chat",
-  documents: "Documents",
   benefits: "Benefits review",
   playground: "Playground",
   evaluation: "Evaluation",
@@ -199,14 +198,14 @@ export default function App() {
   }
 
   const visiblePages: Page[] = isAdmin
-    ? ["plans", "chat", "documents", "benefits", "playground", "evaluation"]
-    : ["plans", "chat"];
+    ? ["chat", "plans", "benefits", "playground", "evaluation"]
+    : ["chat", "plans"];
   const page = activePage === "profile" || visiblePages.includes(activePage) ? activePage : "chat";
 
   return (
       <main className={`page-shell ${page === "chat" ? "chat-shell" : ""}`}>
       <header className="topbar app-topbar">
-        <Brand />
+        <Brand onClick={() => setActivePage("chat")} />
         <nav className="page-nav" aria-label="Main navigation">
           {visiblePages.map((item) => (
             <button key={item} type="button" className={`nav-link ${page === item ? "active" : ""}`} aria-current={page === item ? "page" : undefined} onClick={() => setActivePage(item)}>
@@ -218,14 +217,12 @@ export default function App() {
           <span className={`role-badge ${isAdmin ? "admin" : ""}`}>{isAdmin ? "Admin" : "Member"}</span>
           <span className="account-email">{user.email}</span>
           <Button variant="ghost" size="icon" className={`profile-button ${page === "profile" ? "active" : ""}`} aria-label="Profile" aria-current={page === "profile" ? "page" : undefined} title="Profile" onClick={() => setActivePage("profile")}><Icon name="profile" /></Button>
-          <Button variant="ghost" size="icon" aria-label="Sign out" title="Sign out" onClick={handleSignOut}><Icon name="logout" /></Button>
         </div>
       </header>
 
       <section className={`app-content ${page === "chat" ? "chat-content" : ""}`}>
         {page === "chat" && <ChatPage question={question} setQuestion={setQuestion} handleSubmit={handleSubmit} loading={loading} turns={chatTurns} onNewChat={startNewChat} isAdmin={isAdmin} />}
         {page === "plans" && <PlansPage user={user} isAdmin={isAdmin} />}
-        {page === "documents" && isAdmin && <DocumentsPage user={user} />}
         {page === "benefits" && isAdmin && <BenefitsReviewPage user={user} />}
         {page === "playground" && isAdmin && <RetrievalPlayground user={user} />}
         {page === "evaluation" && isAdmin && <EvaluationPage user={user} />}
@@ -371,7 +368,7 @@ function BenefitsReviewPage({ user }: { user: User }) {
   </div>;
 }
 
-function DocumentsPage({ user }: { user: User }) {
+function AdminDocumentsSection({ user, onDocumentsUpdated }: { user: User; onDocumentsUpdated: () => void }) {
   const [documents, setDocuments] = useState<ManagedDocument[]>([]);
   const [inspection, setInspection] = useState<any>(null);
   const [error, setError] = useState("");
@@ -387,7 +384,7 @@ function DocumentsPage({ user }: { user: User }) {
     return response.json();
   }
   async function refresh() {
-    try { setDocuments(await api("/api/admin/documents")); }
+    try { setDocuments(await api("/api/admin/documents")); onDocumentsUpdated(); }
     catch (e) { setError(e instanceof Error ? e.message : "Could not load documents."); }
   }
   useEffect(() => { void refresh(); }, [user.uid]);
@@ -414,10 +411,10 @@ function DocumentsPage({ user }: { user: User }) {
     catch (e) { setError(e instanceof Error ? e.message : "Could not queue document."); }
     finally { setBusy(false); }
   }
-  return <div className="content-page">
-    <PageHeading eyebrow="ADMIN WORKSPACE" title="Source documents" description="Upload PDFs, run the local pipeline, and inspect readiness, stages, warnings, pages, and chunks. Verification is optional and does not establish SBC eligibility." />
+  return <section className="mt-12" aria-labelledby="admin-documents-title">
+    <div className="page-heading"><p className="eyebrow">ADMIN WORKSPACE</p><h2 id="admin-documents-title">Source documents</h2><p>Upload PDFs, run the local pipeline, and inspect readiness, stages, warnings, pages, and chunks. Verification is optional and does not establish SBC eligibility.</p></div>
     {error && <p role="alert" className="chat-error">{error}</p>}{notice && <p role="status">{notice}</p>}
-    <Card><CardContent className="p-5"><h2 className="font-semibold">Upload a plan PDF</h2><p className="mb-4 text-sm text-muted-foreground">Uploads are stored in Neon. Run <code>python -m app.pipeline</code> locally to process them. Maximum file size: 15 MB.</p>
+    <Card id="admin-document-upload"><CardContent className="p-5"><h3 className="font-semibold">Upload a plan PDF</h3><p className="mb-4 text-sm text-muted-foreground">Uploads are stored in Neon. Run <code>python -m app.pipeline</code> locally to process them. Maximum file size: 15 MB.</p>
       <form onSubmit={upload} className="grid gap-3 sm:grid-cols-2">
         <label className="field-label">PDF file<input className="text-input" type="file" name="file" accept="application/pdf,.pdf" required /></label>
         <label className="field-label">Insurer<input className="text-input" name="insurer" maxLength={120} required /></label>
@@ -429,12 +426,12 @@ function DocumentsPage({ user }: { user: User }) {
         <div><Button type="submit" disabled={busy}>{busy ? "Uploading…" : "Upload candidate PDF"}</Button></div>
       </form>
     </CardContent></Card>
-    <Card className="mt-5"><CardContent className="p-5"><h2 className="font-semibold">Processing status</h2><p className="mb-3 text-sm text-muted-foreground">Ready documents can answer questions. Warnings affect only the evidence they describe. Failed documents need reprocessing.</p>
+    <Card className="mt-5"><CardContent className="p-5"><h3 className="font-semibold">Processing status</h3><p className="mb-3 text-sm text-muted-foreground">Ready documents can answer questions. Warnings affect only the evidence they describe. Failed documents need reprocessing.</p>
       {documents.map((doc) => <div className="border-b py-4" key={doc.document_id}><div className="flex flex-wrap items-start justify-between gap-3"><div><strong>{doc.plan_name || doc.original_filename}</strong><p className="text-sm text-muted-foreground">{doc.insurer} · {doc.plan_type?.toUpperCase()} · {doc.coverage_type} {doc.plan_year || ""} · {doc.parsed_pages} pages · {doc.review_status} · {doc.corpus_status}</p><p className="mt-1 text-xs">Stages: {Object.entries(doc.processing_stages || {}).map(([stage, state]) => `${stage}: ${state}`).join(" · ") || "not started"}</p>{doc.processing_warnings?.map((warning, index) => <p key={index} className="mt-1 text-sm text-amber-800">Warning: {warning}</p>)}{doc.ingestion_error && <p className="mt-1 text-sm text-red-800">Failure: {doc.ingestion_error}</p>}</div><div className="flex gap-2"><Button variant="outline" onClick={() => void inspect(doc.document_id)}>Inspect</Button>{["failed", "needs_review"].includes(doc.review_status) && <Button variant="outline" disabled={busy} onClick={() => void retry(doc.document_id)}>Retry</Button>}{["ready", "ready_with_warnings", "approved"].includes(doc.review_status) && <Button variant="outline" disabled={busy} onClick={() => void review(doc.document_id, "rejected")}>Reject</Button>}{["ready", "ready_with_warnings", "rejected"].includes(doc.review_status) && doc.processing_stages?.embedding === "completed" && <Button disabled={busy} onClick={() => void review(doc.document_id, "approved")}>Verify</Button>}</div></div></div>)}
       {!documents.length && <p className="py-4 text-sm text-muted-foreground">No documents uploaded.</p>}
     </CardContent></Card>
-    {inspection && <Card className="mt-5"><CardContent className="p-5"><h2 className="font-semibold">Inspection: {inspection.document.original_filename}</h2><p className="mb-4 text-xs text-muted-foreground">{inspection.document.plan_name} · {inspection.document.corpus_status} · {inspection.document.review_status}</p><p className="text-xs">Stages: {Object.entries(inspection.document.processing_stages || {}).map(([stage, state]) => `${stage}: ${state}`).join(" · ") || "not started"}</p>{inspection.document.processing_warnings?.map((warning: string, index: number) => <p key={index} className="text-sm text-amber-800">Warning: {warning}</p>)}{inspection.document.ingestion_error && <p className="text-sm text-red-800">Failure: {inspection.document.ingestion_error}</p>}{inspection.pages.map((page: any) => <details className="border-t py-3" key={page.page_id}><summary className="cursor-pointer font-medium">Page {page.page_number} · {page.section_heading || "Section not detected"} · {page.parse_status}</summary><pre className="mt-2 whitespace-pre-wrap text-xs">{page.extracted_text || "No text extracted"}{page.tables_json?.length ? `\n\nTABLES\n${JSON.stringify(page.tables_json, null, 2)}` : ""}</pre></details>)}<details className="border-t py-3"><summary className="cursor-pointer font-medium">Chunks ({inspection.chunks.length})</summary>{inspection.chunks.map((chunk: any) => <details className="ml-3 border-t py-2" key={chunk.chunk_id}><summary>{chunk.chunk_strategy} · pages {chunk.page_start}–{chunk.page_end}</summary><pre className="whitespace-pre-wrap text-xs">{chunk.chunk_text}\n\n{JSON.stringify(chunk.provenance, null, 2)}</pre></details>)}</details></CardContent></Card>}
-  </div>;
+    {inspection && <Card className="mt-5"><CardContent className="p-5"><h3 className="font-semibold">Inspection: {inspection.document.original_filename}</h3><p className="mb-4 text-xs text-muted-foreground">{inspection.document.plan_name} · {inspection.document.corpus_status} · {inspection.document.review_status}</p><p className="text-xs">Stages: {Object.entries(inspection.document.processing_stages || {}).map(([stage, state]) => `${stage}: ${state}`).join(" · ") || "not started"}</p>{inspection.document.processing_warnings?.map((warning: string, index: number) => <p key={index} className="text-sm text-amber-800">Warning: {warning}</p>)}{inspection.document.ingestion_error && <p className="text-sm text-red-800">Failure: {inspection.document.ingestion_error}</p>}{inspection.pages.map((page: any) => <details className="border-t py-3" key={page.page_id}><summary className="cursor-pointer font-medium">Page {page.page_number} · {page.section_heading || "Section not detected"} · {page.parse_status}</summary><pre className="mt-2 whitespace-pre-wrap text-xs">{page.extracted_text || "No text extracted"}{page.tables_json?.length ? `\n\nTABLES\n${JSON.stringify(page.tables_json, null, 2)}` : ""}</pre></details>)}<details className="border-t py-3"><summary className="cursor-pointer font-medium">Chunks ({inspection.chunks.length})</summary>{inspection.chunks.map((chunk: any) => <details className="ml-3 border-t py-2" key={chunk.chunk_id}><summary>{chunk.chunk_strategy} · pages {chunk.page_start}–{chunk.page_end}</summary><pre className="whitespace-pre-wrap text-xs">{chunk.chunk_text}\n\n{JSON.stringify(chunk.provenance, null, 2)}</pre></details>)}</details></CardContent></Card>}
+  </section>;
 }
 
 function ChatPage({ question, setQuestion, handleSubmit, loading, turns, onNewChat, isAdmin }: {
@@ -524,6 +521,7 @@ function PlansPage({ user, isAdmin }: { user: User; isAdmin: boolean }) {
   const [plans, setPlans] = useState<ApprovedPlan[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [refreshVersion, setRefreshVersion] = useState(0);
   useEffect(() => {
     let active = true;
     void (async () => {
@@ -532,7 +530,7 @@ function PlansPage({ user, isAdmin }: { user: User; isAdmin: boolean }) {
         const response = await fetch(`${API_BASE}/api/plans`, { headers: { Authorization: `Bearer ${token}` } });
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.detail || `Request failed (${response.status}).`);
-        if (active) setPlans(payload);
+        if (active) { setPlans(payload); setError(""); }
       } catch (err) {
         if (active) setError(err instanceof Error ? err.message : "Could not load plans.");
       } finally {
@@ -540,10 +538,13 @@ function PlansPage({ user, isAdmin }: { user: User; isAdmin: boolean }) {
       }
     })();
     return () => { active = false; };
-  }, [user]);
+  }, [user, refreshVersion]);
   return (
     <div className="content-page">
-      <PageHeading eyebrow="PLAN LIBRARY" title="Plans" description="Ready documents available for provisional answers. SBC and public-source status remain unverified." />
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <PageHeading eyebrow="PLAN LIBRARY" title="Plans" description="Ready documents available for provisional answers. SBC and public-source status remain unverified." />
+        {isAdmin && <Button variant="outline" onClick={() => document.getElementById("admin-document-upload")?.scrollIntoView({ behavior: "smooth" })}>Upload document</Button>}
+      </div>
       {error && <p role="alert" className="chat-error">{error}</p>}
       {loading ? <p>Loading plans…</p> : plans.length > 0 ? <div className="grid gap-3 md:grid-cols-2">{plans.map((plan) =>
         <Card key={plan.plan_id}><CardContent className="p-5"><h2 className="font-semibold">{plan.insurer} {plan.plan_name}</h2><p className="mt-2 text-sm text-muted-foreground">{plan.coverage_type} · {plan.plan_type} · {plan.plan_year || "year unknown"}</p><p className="mt-2 text-xs text-muted-foreground">Available for provisional use; SBC/public-source status unverified.</p></CardContent></Card>
@@ -551,8 +552,9 @@ function PlansPage({ user, isAdmin }: { user: User; isAdmin: boolean }) {
         <div className="empty-mark"><Icon name="book" /></div>
         <h2>No ready plans yet</h2>
         <p>Plan details will appear here after source documents complete local processing.</p>
-        {isAdmin && <div className="admin-notice"><strong>Admin workspace</strong><span>Use Documents to upload PDFs, run the local pipeline, and inspect processing issues.</span></div>}
+        {isAdmin && <div className="admin-notice"><strong>Admin workspace</strong><span>Upload a candidate PDF below, then run the local pipeline.</span></div>}
       </CardContent></Card>}
+      {isAdmin && <AdminDocumentsSection user={user} onDocumentsUpdated={() => setRefreshVersion((version) => version + 1)} />}
     </div>
   );
 }
@@ -649,7 +651,12 @@ function ProfilePage({ user, isAdmin, onSignOut }: { user: User; isAdmin: boolea
       <Card><CardContent className="profile-card">
         <div className="profile-avatar">{(user.email || "U").slice(0, 1).toUpperCase()}</div>
         <div className="profile-details"><span className="eyebrow">EMAIL</span><strong>{user.email || "No email address"}</strong><span className="eyebrow">ACCESS</span><strong>{isAdmin ? "Admin" : "Member"}</strong><span className="eyebrow">ACCOUNT ID</span><code>{user.uid}</code></div>
-        <div className="profile-actions"><Button variant="outline" onClick={onSignOut}><Icon name="logout" />Sign out</Button><Button variant="outline" disabled>Edit profile</Button><Button variant="outline" disabled>Delete account</Button><p>Profile editing and account deletion are not connected yet.</p></div>
+        <div className="profile-actions">
+          <Button variant="outline" disabled>Edit profile</Button>
+          <Button variant="outline" disabled>Delete account</Button>
+          <p>Profile editing and account deletion are not connected yet.</p>
+          <Button variant="outline" className="profile-signout" onClick={onSignOut}><Icon name="logout" />Sign out</Button>
+        </div>
       </CardContent></Card>
     </div>
   );
@@ -683,8 +690,11 @@ function Answer({ result }: { result: ChatResult }) {
   );
 }
 
-function Brand() {
-  return <div className="brand"><span className="brand-mark"><Icon name="spark" /></span><span>SBC<span className="brand-light"> Assistant</span></span></div>;
+function Brand({ onClick }: { onClick?: () => void }) {
+  const content = <><span className="brand-mark"><Icon name="spark" /></span><span>SBC<span className="brand-light"> Assistant</span></span></>;
+  return onClick
+    ? <button type="button" className="brand brand-home" aria-label="Go to Chat" onClick={onClick}>{content}</button>
+    : <div className="brand">{content}</div>;
 }
 
 function SetupScreen() {
