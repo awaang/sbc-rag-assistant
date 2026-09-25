@@ -42,12 +42,13 @@ const pageLabels: Record<Page, string> = {
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
-function Icon({ name, className = "" }: { name: "spark" | "send" | "shield" | "book" | "logout"; className?: string }) {
+function Icon({ name, className = "" }: { name: "spark" | "send" | "shield" | "book" | "profile" | "logout"; className?: string }) {
   const common = { className, width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true as const };
   if (name === "spark") return <svg {...common}><path d="m12 3 1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2L12 3Z"/><path d="m19 15 .9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15Z"/></svg>;
   if (name === "send") return <svg {...common}><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>;
   if (name === "shield") return <svg {...common}><path d="M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11Z"/><path d="m9 12 2 2 4-4"/></svg>;
   if (name === "book") return <svg {...common}><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg>;
+  if (name === "profile") return <svg {...common}><circle cx="12" cy="8" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/></svg>;
   return <svg {...common}><path d="M10 17l5-5-5-5"/><path d="M15 12H3"/><path d="M12 3h6a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3h-6"/></svg>;
 }
 
@@ -160,6 +161,10 @@ export default function App() {
     setLoading(false);
   }
 
+  function handleSignOut() {
+    if (firebaseAuth) void signOut(firebaseAuth);
+  }
+
   if (!firebaseConfigured) {
     return <SetupScreen />;
   }
@@ -194,9 +199,9 @@ export default function App() {
   }
 
   const visiblePages: Page[] = isAdmin
-    ? ["plans", "chat", "documents", "benefits", "playground", "evaluation", "profile"]
-    : ["plans", "chat", "profile"];
-  const page = visiblePages.includes(activePage) ? activePage : "chat";
+    ? ["plans", "chat", "documents", "benefits", "playground", "evaluation"]
+    : ["plans", "chat"];
+  const page = activePage === "profile" || visiblePages.includes(activePage) ? activePage : "chat";
 
   return (
       <main className={`page-shell ${page === "chat" ? "chat-shell" : ""}`}>
@@ -212,7 +217,8 @@ export default function App() {
         <div className="account-actions">
           <span className={`role-badge ${isAdmin ? "admin" : ""}`}>{isAdmin ? "Admin" : "Member"}</span>
           <span className="account-email">{user.email}</span>
-          <Button variant="ghost" size="icon" aria-label="Sign out" title="Sign out" onClick={() => firebaseAuth && signOut(firebaseAuth)}><Icon name="logout" /></Button>
+          <Button variant="ghost" size="icon" className={`profile-button ${page === "profile" ? "active" : ""}`} aria-label="Profile" aria-current={page === "profile" ? "page" : undefined} title="Profile" onClick={() => setActivePage("profile")}><Icon name="profile" /></Button>
+          <Button variant="ghost" size="icon" aria-label="Sign out" title="Sign out" onClick={handleSignOut}><Icon name="logout" /></Button>
         </div>
       </header>
 
@@ -223,7 +229,7 @@ export default function App() {
         {page === "benefits" && isAdmin && <BenefitsReviewPage user={user} />}
         {page === "playground" && isAdmin && <RetrievalPlayground user={user} />}
         {page === "evaluation" && isAdmin && <EvaluationPage user={user} />}
-        {page === "profile" && <ProfilePage user={user} isAdmin={isAdmin} />}
+        {page === "profile" && <ProfilePage user={user} isAdmin={isAdmin} onSignOut={handleSignOut} />}
       </section>
       <footer className="site-footer"><span>SBC ASSISTANT</span><span>For plan information only · Not medical advice</span></footer>
     </main>
@@ -636,14 +642,14 @@ function EvaluationPage({ user }: { user: User }) {
     </CardContent></Card></div>;
 }
 
-function ProfilePage({ user, isAdmin }: { user: User; isAdmin: boolean }) {
+function ProfilePage({ user, isAdmin, onSignOut }: { user: User; isAdmin: boolean; onSignOut: () => void }) {
   return (
     <div className="content-page">
       <PageHeading eyebrow="ACCOUNT" title="Profile" description="View your signed-in account and access level." />
       <Card><CardContent className="profile-card">
         <div className="profile-avatar">{(user.email || "U").slice(0, 1).toUpperCase()}</div>
         <div className="profile-details"><span className="eyebrow">EMAIL</span><strong>{user.email || "No email address"}</strong><span className="eyebrow">ACCESS</span><strong>{isAdmin ? "Admin" : "Member"}</strong><span className="eyebrow">ACCOUNT ID</span><code>{user.uid}</code></div>
-        <div className="profile-actions"><Button variant="outline" disabled>Edit profile</Button><Button variant="outline" disabled>Delete account</Button><p>Profile editing and account deletion are not connected yet.</p></div>
+        <div className="profile-actions"><Button variant="outline" onClick={onSignOut}><Icon name="logout" />Sign out</Button><Button variant="outline" disabled>Edit profile</Button><Button variant="outline" disabled>Delete account</Button><p>Profile editing and account deletion are not connected yet.</p></div>
       </CardContent></Card>
     </div>
   );

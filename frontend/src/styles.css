@@ -29,6 +29,8 @@ button, input, textarea { font: inherit; }
 .nav-link.active { background: #eaf0fa; color: #254b83; font-weight: 650; }
 .account-actions { display: flex; align-items: center; gap: 11px; }
 .account-email { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #68758a; font-size: 12px; }
+.profile-button { border: 1px solid #d9e2ed; border-radius: 50%; background: #fff; color: #4c6688; }
+.profile-button.active { border-color: #b9cce8; background: #eaf0fa; color: #254b83; }
 .role-badge { border: 1px solid #d9e2ed; border-radius: 999px; padding: 4px 9px; color: #63738a; background: #fff; font-size: 10px; font-weight: 650; }
 .role-badge.admin { border-color: #d8e4f4; color: #355b91; background: #f0f5fc; }
 .app-content { flex: 1; width: calc(100% - 48px); max-width: 1050px; margin: 0 auto; padding: 54px 0 60px; }
