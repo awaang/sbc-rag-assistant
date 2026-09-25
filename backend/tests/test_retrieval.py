@@ -243,3 +243,135 @@ def test_bm25_only_evaluation_skips_semantic_model_and_records_snapshot(monkeypa
     assert all(row["method"] == "bm25" for row in response["results"])
     assert all("INSERT INTO evaluation_runs" in query or "INSERT INTO evaluation_results" in query
                for query in connection.queries if query.startswith("INSERT"))
+
+
+@pytest.mark.parametrize("method,expected_methods", [
+    ("semantic", {"semantic"}),
+    ("all", {"bm25", "semantic"}),
+])
+def test_semantic_and_all_evaluation_run_expected_configurations(
+        monkeypatch, tmp_path, method, expected_methods):
+    manifest_directory = tmp_path / "evaluation"
+    manifest_directory.mkdir()
+    (manifest_directory / "questions.json").write_text(
+        '{"manifest_version":"test-v1","corpus":"fixture","questions":['
+        '{"question_id":"q1","question":"Question?","question_type":"lookup",'
+        '"expected_answer":"Answer","expected_document_ids":[5],"expected_pages":[2]}]}'
+    )
+
+    class FakePath:
+        def __init__(self, _value):
+            pass
+
+        def resolve(self):
+            return SimpleNamespace(parents=(None, None, tmp_path))
+
+    monkeypatch.setattr(main, "Path", FakePath)
+    monkeypatch.setattr(main, "model_fingerprint", lambda: "model-digest")
+    calls = []
+
+    def fake_retrieval(_connection, request):
+        calls.append((request.method, request.chunk_strategy))
+        return {
+            "results": [{"document_id": 5, "page_start": 2, "page_end": 2,
+                         "rank": 1, "chunk_id": 11}],
+            "timings": {"total_request_ms": 4.0, "corpus_load_ms": 1.0,
+                        "embedding_load_ms": 0.5 if request.method == "semantic" else 0.0,
+                        "index_build_ms": 1.0, "query_embedding_ms": 1.0 if request.method == "semantic" else 0.0,
+                        "model_load_ms": 0.0, "search_ms": 1.0},
+        }
+
+    monkeypatch.setattr(main, "run_retrieval", fake_retrieval)
+
+    class Connection:
+        def __init__(self):
+            self.queries = []
+
+        @contextmanager
+        def transaction(self):
+            yield
+
+        def execute(self, sql, params=()):
+            self.queries.append((sql, params))
+            if "string_agg" in sql:
+                return Result(rows=[{"chunk_strategy": "fixed_size", "strategy_version": 1,
+                                     "chunk_count": 2, "chunk_digests": "1:abc,2:def"},
+                                    {"chunk_strategy": "section_aware", "strategy_version": 1,
+                                     "chunk_count": 2, "chunk_digests": "3:ghi,4:jkl"}])
+            if "GROUP BY c.chunk_strategy" in sql and "embedding_count" not in sql:
+                return Result(rows=[{"chunk_strategy": "fixed_size", "chunk_count": 2},
+                                    {"chunk_strategy": "section_aware", "chunk_count": 2}])
+            if "embedding_count" in sql:
+                return Result(rows=[{"chunk_strategy": "fixed_size", "embedding_count": 2},
+                                    {"chunk_strategy": "section_aware", "embedding_count": 2}])
+            if "SELECT document_id, document_sha256" in sql:
+                return Result(rows=[{"document_id": 5, "document_sha256": "a" * 64,
+                                     "reviewed_at": None}])
+            if "INSERT INTO evaluation_runs" in sql:
+                assert sql.count("%s") == len(params)
+                return Result(row={"run_id": len([q for q, _ in self.queries if q.startswith("INSERT INTO evaluation_runs")])})
+            if "INSERT INTO evaluation_results" in sql:
+                assert sql.count("%s") == len(params)
+                return Result()
+            raise AssertionError(f"Unexpected SQL: {sql}")
+
+    response = main.run_evaluation({}, Connection(), method=method)
+
+    assert {row["method"] for row in response["results"]} == expected_methods
+    assert len(response["results"]) == len(expected_methods) * 2
+    assert set(calls) == {
+        (retrieval_method, strategy)
+        for retrieval_method in expected_methods
+        for strategy in ("fixed_size", "section_aware")
+    }
+    assert all(row["hit_rate"] == 1.0 and row["mean_reciprocal_rank"] == 1.0
+               for row in response["results"])
+
+
+def test_semantic_evaluation_rejects_incomplete_embeddings(monkeypatch, tmp_path):
+    manifest_directory = tmp_path / "evaluation"
+    manifest_directory.mkdir()
+    (manifest_directory / "questions.json").write_text(
+        '{"manifest_version":"test-v1","questions":['
+        '{"question_id":"q1","question":"Question?","question_type":"lookup",'
+        '"expected_answer":"Answer","expected_document_ids":[5]}]}'
+    )
+
+    class FakePath:
+        def __init__(self, _value):
+            pass
+
+        def resolve(self):
+            return SimpleNamespace(parents=(None, None, tmp_path))
+
+    class Connection:
+        def execute(self, sql, _params=()):
+            if "GROUP BY c.chunk_strategy" in sql and "embedding_count" not in sql:
+                return Result(rows=[{"chunk_strategy": "fixed_size", "chunk_count": 2},
+                                    {"chunk_strategy": "section_aware", "chunk_count": 2}])
+            if "embedding_count" in sql:
+                return Result(rows=[{"chunk_strategy": "fixed_size", "embedding_count": 1},
+                                    {"chunk_strategy": "section_aware", "embedding_count": 2}])
+            raise AssertionError(f"Unexpected SQL: {sql}")
+
+    monkeypatch.setattr(main, "Path", FakePath)
+    monkeypatch.setattr(main, "model_fingerprint", lambda: "model-digest")
+
+    with pytest.raises(main.HTTPException) as error:
+        main.run_evaluation({}, Connection(), method="semantic")
+
+    assert error.value.status_code == 409
+    assert "current model-fingerprinted embeddings" in error.value.detail
+
+
+def test_semantic_model_initialization_failure_returns_service_unavailable(monkeypatch):
+    monkeypatch.setattr(retrieval, "approved_chunks", lambda *_args: [{"chunk_id": 1}])
+    monkeypatch.setattr(retrieval, "model_fingerprint",
+                        lambda: (_ for _ in ()).throw(RuntimeError("model failed")))
+    request = main.RetrievalRequest(question="Q", method="semantic", chunk_strategy="fixed_size")
+
+    with pytest.raises(main.HTTPException) as error:
+        main.run_retrieval(object(), request)
+
+    assert error.value.status_code == 503
+    assert "model unavailable" in error.value.detail
