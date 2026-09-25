@@ -45,7 +45,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -702,6 +702,33 @@ def retry_document_ingestion(
     connection.commit()
     background_tasks.add_task(drain_pending_documents)
     return dict(row)
+
+
+@app.delete("/api/admin/documents/{document_id}")
+def delete_document(
+    document_id: int,
+    _admin: Annotated[dict, Depends(require_admin)],
+    connection: Annotated[psycopg.Connection, Depends(database_connection)],
+) -> dict:
+    """Permanently remove a document; pages, chunks, embeddings, and benefits cascade."""
+    with connection.transaction():
+        doc = connection.execute(
+            "SELECT plan_id, ingestion_queued_at, review_status FROM documents WHERE document_id = %s FOR UPDATE",
+            (document_id,),
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document was not found.")
+        if doc["ingestion_queued_at"] is not None or doc["review_status"] == "processing":
+            raise HTTPException(status_code=409, detail="Wait for processing to finish before deleting this document.")
+        connection.execute("DELETE FROM documents WHERE document_id = %s", (document_id,))
+        if doc["plan_id"] is not None:
+            connection.execute(
+                """DELETE FROM plans WHERE plan_id = %s
+                   AND NOT EXISTS (SELECT 1 FROM documents WHERE plan_id = %s)""",
+                (doc["plan_id"], doc["plan_id"]),
+            )
+    connection.commit()
+    return {"document_id": document_id, "deleted": True}
 
 
 @app.patch("/api/admin/benefits/{benefit_id}")

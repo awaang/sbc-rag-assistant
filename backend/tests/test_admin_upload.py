@@ -87,6 +87,48 @@ def test_retry_requeues_and_starts_automatic_processing(monkeypatch):
     assert scheduled == [True]
 
 
+def test_delete_removes_document_and_unused_plan():
+    statements = []
+
+    class DeleteConnection(FakeConnection):
+        def execute(self, sql, params=None):
+            statements.append(sql)
+            if "SELECT plan_id, ingestion_queued_at" in sql:
+                return FakeResult({"plan_id": 3, "ingestion_queued_at": None, "review_status": "ready"})
+            return FakeResult(None)
+
+    app.dependency_overrides[require_user] = lambda: {"uid": "admin-uid", "admin": True}
+    app.dependency_overrides[database_connection] = lambda: DeleteConnection()
+
+    response = TestClient(app).delete("/api/admin/documents/12")
+
+    assert response.status_code == 200
+    assert any("DELETE FROM documents WHERE document_id" in sql for sql in statements)
+    assert any("DELETE FROM plans" in sql and "NOT EXISTS" in sql for sql in statements)
+
+
+def test_delete_refuses_document_still_processing():
+    class ProcessingConnection(FakeConnection):
+        def execute(self, sql, params=None):
+            assert "DELETE" not in sql
+            return FakeResult({"plan_id": 3, "ingestion_queued_at": "2026-09-25T00:00:00Z", "review_status": "processing"})
+
+    app.dependency_overrides[require_user] = lambda: {"uid": "admin-uid", "admin": True}
+    app.dependency_overrides[database_connection] = lambda: ProcessingConnection()
+
+    response = TestClient(app).delete("/api/admin/documents/12")
+
+    assert response.status_code == 409
+
+
+def test_delete_rejects_non_admins():
+    app.dependency_overrides[require_user] = lambda: {"uid": "member-uid", "admin": False}
+
+    response = TestClient(app).delete("/api/admin/documents/12")
+
+    assert response.status_code == 403
+
+
 def test_verifying_benefit_requires_confirmed_section():
     with pytest.raises(HTTPException) as error:
         review_benefit(1, BenefitReview(verification_status="verified", value_text="Deductible: $500"),
