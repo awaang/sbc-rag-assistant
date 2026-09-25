@@ -193,8 +193,8 @@ export default function App() {
         {page === "plans" && <PlansPage isAdmin={isAdmin} />}
         {page === "documents" && isAdmin && <DocumentsPage user={user} />}
         {page === "benefits" && isAdmin && <BenefitsReviewPage user={user} />}
-        {page === "playground" && isAdmin && <PlaceholderPage page="playground" />}
-        {page === "evaluation" && isAdmin && <PlaceholderPage page="evaluation" />}
+        {page === "playground" && isAdmin && <RetrievalPlayground user={user} />}
+        {page === "evaluation" && isAdmin && <EvaluationPage user={user} />}
         {page === "profile" && <ProfilePage user={user} isAdmin={isAdmin} />}
       </section>
       <footer className="site-footer"><span>SBC ASSISTANT</span><span>For plan information only · Not medical advice</span></footer>
@@ -439,20 +439,53 @@ function PlansPage({ isAdmin }: { isAdmin: boolean }) {
   );
 }
 
-function PlaceholderPage({ page }: { page: "playground" | "evaluation" }) {
-  const playground = page === "playground";
-  return (
-    <div className="content-page">
-      <PageHeading eyebrow={playground ? "ADMIN TOOLS" : "QUALITY REVIEW"} title={playground ? "Retrieval playground" : "Evaluation set"} description={playground ? "Compare retrieval methods and chunking strategies against a question." : "Review the labeled question set and measured answer, retrieval, and latency results."} />
-      <Card><CardContent className="empty-state">
-        <div className="coming-soon">SKELETON</div>
-        <h2>{playground ? "Experiment controls are coming next" : "Evaluation workspace is coming next"}</h2>
-        <p>{playground ? "This admin-only page will let you choose BM25 or semantic search, select a chunking strategy, and inspect evidence diagnostics." : "This admin-only page will hold the versioned 20–30 question set and show measured results after the corpus and evaluation runner are ready."}</p>
-        {playground && <div className="placeholder-controls"><label>Retrieval method<select disabled defaultValue=""><option value="">Choose a method</option><option>BM25</option><option>Semantic (FAISS)</option></select></label><label>Chunking strategy<select disabled defaultValue=""><option value="">Choose a strategy</option><option>Fixed-size</option><option>Section-aware</option></select></label><Button disabled>Run comparison</Button></div>}
-        {!playground && <div className="evaluation-stats"><span><strong>20–30</strong> target questions</span><span><strong>4</strong> retrieval/chunking combinations</span><span><strong>0</strong> measured runs</span></div>}
-      </CardContent></Card>
-    </div>
-  );
+function RetrievalPlayground({ user }: { user: User }) {
+  const [question, setQuestion] = useState("");
+  const [method, setMethod] = useState("bm25");
+  const [strategy, setStrategy] = useState("fixed_size");
+  const [planId, setPlanId] = useState(""); const [documentId, setDocumentId] = useState(""); const [section, setSection] = useState("");
+  const [result, setResult] = useState<any>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function search(event: FormEvent) {
+    event.preventDefault(); setBusy(true); setError(""); setResult(null);
+    try {
+      const token = await user.getIdToken();
+      const response = await fetch(`${API_BASE}/api/admin/retrieval/search`, {
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ question, method, chunk_strategy: strategy, top_k: 5,
+          ...(planId ? { plan_id: Number(planId) } : {}), ...(documentId ? { document_id: Number(documentId) } : {}), ...(section.trim() ? { section: section.trim() } : {}) }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || `Request failed (${response.status}).`);
+      setResult(payload);
+    } catch (err) { setError(err instanceof Error ? err.message : "Retrieval request failed."); }
+    finally { setBusy(false); }
+  }
+  return <div className="content-page"><PageHeading eyebrow="ADMIN TOOLS" title="Retrieval playground" description="Search approved evidence with either method and chunking strategy. Corpus results remain provisional." />
+    <Card><CardContent className="p-5"><form onSubmit={(event) => void search(event)} className="space-y-3">
+      <label className="field-label">Question<textarea className="text-input min-h-20" value={question} onChange={(event) => setQuestion(event.target.value)} required maxLength={2000} /></label>
+      <div className="grid gap-3 md:grid-cols-3"><label className="field-label">Retrieval method<select className="text-input" value={method} onChange={(event) => setMethod(event.target.value)}><option value="bm25">BM25</option><option value="semantic">Semantic (FAISS)</option></select></label><label className="field-label">Chunking strategy<select className="text-input" value={strategy} onChange={(event) => setStrategy(event.target.value)}><option value="fixed_size">Fixed-size</option><option value="section_aware">Section-aware</option></select></label><label className="field-label">Plan ID (optional)<input className="text-input" type="number" min="1" value={planId} onChange={(event) => setPlanId(event.target.value)} /></label><label className="field-label">Document ID (optional)<input className="text-input" type="number" min="1" value={documentId} onChange={(event) => setDocumentId(event.target.value)} /></label><label className="field-label">Section contains (optional)<input className="text-input" value={section} onChange={(event) => setSection(event.target.value)} /></label><div className="self-end"><Button disabled={busy || !question.trim()}>{busy ? "Searching…" : "Search evidence"}</Button></div></div>
+    </form>{error && <p role="alert" className="mt-4 text-red-700">{error}</p>}{result && <div className="mt-5 space-y-3"><p className="text-sm">{result.results.length} results · {Number(result.latency_ms).toFixed(1)} ms total · {result.model_name} ({result.model_version})</p>{result.timings && <p className="text-xs text-muted-foreground">chunks {Number(result.timings.corpus_load_ms).toFixed(1)} ms · vectors {Number(result.timings.embedding_load_ms || 0).toFixed(1)} ms · index {Number(result.timings.index_build_ms).toFixed(1)} ms · query embedding {Number(result.timings.query_embedding_ms).toFixed(1)} ms · model initialization {Number(result.timings.model_load_ms).toFixed(1)} ms · search {Number(result.timings.search_ms).toFixed(1)} ms</p>}{result.index_status && <p className="text-sm text-amber-700">{result.index_status}</p>}{result.results.map((row: any) => <Card key={row.chunk_id}><CardContent className="p-4"><div className="mb-2 text-xs text-muted-foreground">#{row.rank} · score {Number(row.score).toFixed(4)} · {row.plan_name || "Plan unavailable"} · {row.original_filename} · pages {row.page_start ?? "?"}–{row.page_end ?? "?"}</div><pre className="whitespace-pre-wrap text-sm">{row.chunk_text}</pre><details className="mt-2 text-xs"><summary>Provenance</summary><pre className="whitespace-pre-wrap">{JSON.stringify(row.provenance, null, 2)}</pre></details></CardContent></Card>)}</div>}</CardContent></Card>
+  </div>;
+}
+
+function EvaluationPage({ user }: { user: User }) {
+  const [data, setData] = useState<any>(null); const [result, setResult] = useState<any>(null);
+  const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
+  async function call(path: string, method = "GET") {
+    const token = await user.getIdToken();
+    const response = await fetch(`${API_BASE}${path}`, { method, headers: { Authorization: `Bearer ${token}` } });
+    const payload = await response.json(); if (!response.ok) throw new Error(payload.detail || `Request failed (${response.status}).`); return payload;
+  }
+  async function refresh() { try { setData(await call("/api/admin/evaluation")); setError(""); } catch (err) { setError(err instanceof Error ? err.message : "Could not load evaluation data."); } }
+  useEffect(() => { void refresh(); }, [user]);
+  async function run(method: "all" | "bm25" | "semantic") { setBusy(true); setError(""); try { setResult(await call(`/api/admin/evaluation/run?method=${method}`, "POST")); await refresh(); } catch (err) { setError(err instanceof Error ? err.message : "Evaluation run failed."); } finally { setBusy(false); } }
+  return <div className="content-page"><PageHeading eyebrow="QUALITY REVIEW" title="Evaluation set" description="Run the same labeled questions across all four retrieval and chunking combinations. Questions must have manually checked evidence labels." />
+    <Card><CardContent className="p-5"><p className="text-sm">Corpus: {data?.corpus || "Loading…"}</p><p className="text-sm">Manifest {data?.manifest_version || ""} · {data?.question_count ?? "…"} labeled questions (target: 20–30)</p><p className="mt-2 text-sm text-muted-foreground">Add manually verified question, document ID, and page labels to <code>evaluation/questions.json</code>. Ordinary live chat text is never recorded.</p>{error && <p role="alert" className="my-3 text-red-700">{error}</p>}<div className="mt-4 flex flex-wrap gap-2"><Button disabled={busy || !data?.question_count} onClick={() => void run("bm25")}>Run BM25 only</Button><Button variant="outline" disabled={busy || !data?.question_count} onClick={() => void run("semantic")}>Run semantic only</Button><Button variant="outline" disabled={busy || !data?.question_count} onClick={() => void run("all")}>{busy ? "Running…" : "Run all four combinations"}</Button></div>
+      {result && <div className="mt-5 space-y-3"><h2 className="font-semibold">Latest run</h2>{result.model_initialization_ms > 0 && <p className="text-xs text-muted-foreground">Semantic model initialization before query timing: {Number(result.model_initialization_ms).toFixed(1)} ms (reported separately)</p>}{result.results.map((row: any) => <div key={`${row.method}-${row.chunk_strategy}`}><p className="text-sm font-medium">{row.method} · {row.chunk_strategy}: hit rate {(row.hit_rate * 100).toFixed(1)}% · MRR {row.mean_reciprocal_rank.toFixed(3)} · request {row.mean_latency_ms.toFixed(1)} ms</p><p className="ml-3 text-xs text-muted-foreground">load {row.timings.corpus_load_ms.toFixed(1)} ms · index {row.timings.index_build_ms.toFixed(1)} ms · query embed {row.timings.query_embedding_ms.toFixed(1)} ms · model init {row.timings.model_load_ms.toFixed(1)} ms · search {row.timings.search_ms.toFixed(1)} ms</p>{row.by_question_type.map((group: any) => <p key={group.question_type} className="ml-3 text-xs text-muted-foreground">{group.question_type}: {(group.hit_rate * 100).toFixed(1)}% hit rate · MRR {group.mean_reciprocal_rank.toFixed(3)} · {group.mean_latency_ms.toFixed(1)} ms ({group.question_count} questions)</p>)}</div>)}</div>}
+      {!!data?.runs?.length && <div className="mt-6"><h2 className="mb-2 font-semibold">Recent runs</h2>{data.runs.map((row: any) => <details className="border-t py-2" key={row.run_id}><summary className="cursor-pointer text-sm">Run {row.run_id} · {row.manifest_version} · {row.retrieval_method}/{row.chunk_strategy} v{row.chunk_strategy_version} · {row.hit_count}/{row.question_count} hits · MRR {Number(row.mean_reciprocal_rank).toFixed(3)} · request {Number(row.mean_latency_ms).toFixed(1)} ms · search {Number(row.mean_search_ms).toFixed(1)} ms</summary><p className="mt-2 break-all text-xs text-muted-foreground">Manifest SHA-256: {row.manifest_sha256 || "not captured"}</p><p className="break-all text-xs text-muted-foreground">Embedding model: {row.embedding_model_name ? `${row.embedding_model_name} · ${row.embedding_model_version} · ${row.embedding_model_fingerprint}` : "BM25 (no embedding model)"}</p><p className="text-xs text-muted-foreground">Model initialization before per-query timing: {Number(row.model_initialization_ms).toFixed(1)} ms</p><pre className="mt-2 overflow-auto rounded bg-muted p-3 text-xs">{JSON.stringify(row.corpus_snapshot, null, 2)}</pre></details>)}</div>}
+    </CardContent></Card></div>;
 }
 
 function ProfilePage({ user, isAdmin }: { user: User; isAdmin: boolean }) {

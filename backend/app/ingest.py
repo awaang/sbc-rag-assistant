@@ -94,5 +94,16 @@ def main() -> None:
             print(result)
 
 
+def embed_main() -> None:
+    """Embed approved chunks locally and persist the vectors to Neon."""
+    from app.retrieval import make_document_embeddings
+
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        raise SystemExit("DATABASE_URL is required in the repository-root .env file.")
+    with psycopg.connect(database_url, row_factory=dict_row) as connection:
+        print(make_document_embeddings(connection))
+
+
 if __name__ == "__main__":
     main()

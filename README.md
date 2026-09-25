@@ -11,9 +11,9 @@ An authenticated demo for answering questions about health benefits from a provi
 
 ## Current status and corpus
 
-This repository contains a React/Vite frontend, a FastAPI API, Neon migrations and admin document/benefit review workflows, a Render Blueprint, project documentation, and six received PDFs under [`data/source-documents/received/`](data/source-documents/received/). Those files are the provisional development corpus, not verified SBCs. Local PDF ingestion and row-preserving chunking are implemented. Retrieval, evidence-backed answer generation, and evaluation data remain pending; parser, candidate extraction, and admin upload/authentication tests are in `backend/tests/`.
+This repository contains a React/Vite frontend, a FastAPI API, Neon migrations and admin document/benefit review workflows, a Render Blueprint, project documentation, and six received PDFs under [`data/source-documents/received/`](data/source-documents/received/). Those files are the provisional development corpus, not verified SBCs. Local PDF ingestion, row-preserving chunking, BM25 and FAISS retrieval, local embedding persistence, and admin retrieval/evaluation tools are implemented. The labeled evaluation manifest is still empty pending manual review of actual ingested documents; parser output also remains to be reviewed across all six files.
 
-The signed-in UI has a page-flow skeleton for Plans, Chat (home), Profile, and admin tools. Admins can upload/inspect/review documents and review candidate benefits; Playground and Evaluation remain placeholders. Chat has a transcript, composer, starter prompts, and a new-chat action. Displayed turns stay in memory and clear when starting a new chat, signing out, or reloading/closing the page. Each question is sent independently to the current API; prior turns are not included as answer context. Plans and Profile remain placeholders, and chat returns the safe insufficient-evidence response until approved evidence and retrieval are connected. Admin navigation uses the Firebase custom claim for visibility only; the API enforces authorization on admin operations.
+The signed-in UI has pages for Plans, Chat, Profile, and admin tools. Admins can upload/inspect/review documents and candidate benefits, search approved evidence in the Retrieval playground, and run four-way comparisons from Evaluation after labels are added. Chat has a transcript, composer, starter prompts, and a new-chat action. Displayed turns stay in memory and clear when starting a new chat, signing out, or reloading/closing the page. Each question is sent independently; Phase 5 will connect retrieval to cited answer generation. Plans and Chat answers remain placeholders. Admin navigation uses the Firebase custom claim for visibility only; the API enforces authorization on admin operations.
 
 The six PDFs in [`data/source-documents/received/`](data/source-documents/received/) are the provisional development corpus for parsing, retrieval, answer-flow, and evaluation. The metadata in [`metadata.json`](data/source-documents/received/metadata.json) identifies them as unverified; the set includes medical plan/benefit summaries and dental and vision summaries, and public source URLs are not established. Do not describe them as verified SBCs or treat processing/review approval as SBC qualification. Report results as provisional and scoped to these six files. Final qualification of exactly six public standardized medical SBCs with HMO/PPO/HDHP coverage remains TBD and is not a blocker to development.
 
@@ -23,7 +23,7 @@ The six PDFs in [`data/source-documents/received/`](data/source-documents/receiv
 - Firebase Authentication for sign-in and admin roles; the FastAPI server will verify tokens and enforce permissions.
 - Neon Postgres for durable document metadata, uploaded PDF bytes, parsed content, extracted benefit records, citations, and evaluation records.
 - pdfplumber for initial PDF extraction, with Camelot added selectively if inspection shows a table needs it.
-- BM25 plus FAISS semantic search. The local ingestion CLI generates document embeddings; the API generates query embeddings with the same sentence-transformer model and searches an in-memory FAISS index. Store approved embedding values and model/chunk IDs in Neon so the API can build or refresh its index after restarts and approvals. No embedding API or pgvector index is needed initially. Verify the deployed API's model/index memory and startup requirements.
+- BM25 plus FAISS semantic search. Run `python -m app.embed` locally after approving documents to generate and persist document embeddings. The API generates query embeddings with the same sentence-transformer model and builds a FAISS index from approved vectors for semantic searches. Vectors are ordinary Neon array values; no embedding API or pgvector index is used. The admin playground compares configurations; ordinary answer mode will use the measured default after evaluation.
 - Evaluate four combinations: BM25 or semantic vector retrieval, each over fixed-size or semantic/section-aware table-safe chunks. The admin-only evaluation playground will let admins compare configurations; ordinary answer mode uses the measured default.
 - Initial answers use deterministic formatting for verified facts, comparisons, citations, clarification, and abstention; Gemini is not part of the initial implementation. It may be added later as an optional final phrasing step over validated evidence and cannot supply facts or override abstention.
 - Render Free for the React static site and FastAPI web service. The service may sleep when idle, so the first request can be delayed. Persist application data in Neon, not Render's ephemeral filesystem.
@@ -67,7 +67,7 @@ To create the relational schema in Neon, run this after setting `DATABASE_URL`:
 python -m app.db.migrate
 ```
 
-The migrations create the plan, document, parsed-page/table, chunk, benefit-record, and ordinary embedding-value tables. Embeddings use PostgreSQL `DOUBLE PRECISION[]`; the migrations do not install or use pgvector. Migration `002_benefit_review.sql` adds an idempotency index for source-backed benefit candidates, and `003_document_ingestion.sql` adds page tables and ingestion/review details. Run `python -m app.db.migrate` after pulling schema changes. The API database layer supports admin document upload/review and benefit review; chat retrieval is not connected yet.
+The migrations create the plan, document, parsed-page/table, chunk, benefit-record, ordinary embedding-value, and evaluation result tables. Embeddings use PostgreSQL `DOUBLE PRECISION[]`; migrations do not install or use pgvector. Migrations `004` and `005` store evaluation metrics and provenance snapshots, per-question timing breakdowns, and model fingerprints, without question text. Migration `005` adds the embedding integrity fingerprint and expanded reproducibility/timing fields. Run `python -m app.db.migrate` after pulling schema changes. Admin retrieval endpoints are separate from the Phase 5 answer flow.
 
 ### Upload and ingest documents
 
@@ -79,7 +79,19 @@ Install backend dependencies, apply migrations, then run the local ingestion com
 python -m app.ingest
 ```
 
-The command downloads pending PDFs from Neon, parses page text and table cells with pdfplumber, writes page/table provenance, and creates both fixed-size and section-aware chunks. Table rows stay intact with their headers even when a row exceeds the target chunk size. Parse issues remain visible in the admin Documents page. After processing, inspect pages/chunks and approve or reject the document. Approval admits a document to the provisional development workflow; it does not establish SBC status or public availability. The local CLI needs database credentials and uses local CPU/memory; Render does not run parsing.
+The command downloads pending PDFs from Neon, parses page text and table cells with pdfplumber, writes page/table provenance, and creates both fixed-size and section-aware chunks. Table rows stay intact with their headers even when a row exceeds the target chunk size. Parse issues remain visible in the admin Documents page. Inspect pages/chunks, then approve or reject the document. Approval admits a document to the provisional development workflow; it does not establish SBC status or public availability. After approval, generate missing vectors locally with:
+
+```bash
+python -m app.embed
+```
+
+The first run downloads the configured sentence-transformer model if it is not cached. Parsing and embedding use local CPU/memory; Render does not run ingestion.
+
+### Retrieval playground and evaluation
+
+In **Playground**, select BM25 or Semantic (FAISS), choose a chunk strategy, and inspect ranked chunks and provenance. Plan, document, and section filters apply to both the chunk set and semantic index candidates. Semantic search requires approved chunks to have current embeddings; model name/version and a fingerprint of loaded model weights are checked, and vector dimensions, numeric finiteness, and nonzero norms are validated before indexing. Run the local embedding command again if the model fingerprint changes. Model configuration defaults to `EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2` and `EMBEDDING_MODEL_VERSION=all-MiniLM-L6-v2`; keep these consistent between embedding and API processes.
+
+Add 20–30 manually checked entries to [`evaluation/questions.json`](evaluation/questions.json). Each entry has a unique `question_id`, `question`, `question_type`, `expected_answer`, `expected_document_ids` (Neon IDs), and optional `expected_pages`. Check parser output and source locations first. The runner scores expected document/page evidence in top-k, reciprocal rank, and latency. In the admin **Evaluation** page, choose BM25-only, semantic-only, or all four BM25/semantic × fixed-size/section-aware configurations. BM25 runs do not require embeddings; semantic runs require current, complete embeddings. Timings separately report chunk loading, embedding loading, index construction, query embedding/model initialization, and search. Evaluation model initialization is reported separately from per-query measurements. Stored runs include model identity/fingerprint, approved-document and chunk-version snapshots, and per-question metrics/retrieved chunk IDs, but no question or expected-answer text. Label any measurements as provisional and corpus-scoped.
 
 Backend parser, candidate extraction, and admin upload/authentication tests are in `backend/tests/`. Run them from `backend/` with `python -m pytest`.
 
@@ -102,7 +114,7 @@ npm install
 npm run dev
 ```
 
-Open the URL Vite prints (normally `http://localhost:5173`) and register an account or sign in with an existing Firebase user. The chat endpoint currently returns an explicit insufficient-evidence response because the provisional corpus and retrieval implementation are not connected yet. The Debug details section shows response status, citations, and evidence-path information.
+Open the URL Vite prints (normally `http://localhost:5173`) and register an account or sign in with an existing Firebase user. Chat currently returns an explicit insufficient-evidence response until Phase 5 connects approved evidence to answer generation. The Debug details section shows response status, citations, and evidence-path information.
 
 For a production frontend bundle, run `npm run build` from `frontend/`.
 

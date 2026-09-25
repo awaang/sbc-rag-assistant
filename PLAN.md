@@ -15,7 +15,7 @@ This plan records the agreed technology direction and tracks implementation. The
 - **Answers, later phase:** Gemini may be added as an optional final phrasing adapter only after the deterministic answer path is implemented and evaluated. It receives validated facts/evidence and cannot choose values, create citations, fill missing evidence, or override abstention. Do not make initial completion dependent on Gemini or a free tier.
 - **Deployment:** Render Free static site + web service; Neon and Firebase are external managed services. Expect API sleep/cold starts and ephemeral Render filesystems. Store durable state in Neon. Do not require a custom domain or paid persistent disk.
 - **Uploaded source files:** Store modest PDFs as PostgreSQL binary data in Neon for the initial six-plan demo to avoid another account/service and keep uploads durable. Impose a documented upload-size limit below provider/request limits. If corpus size outgrows database storage, revisit object storage only after verifying a no-card option.
-- **Ingestion execution:** Admin upload through the deployed UI is real and durable, but expensive parsing/embedding runs through an admin ingestion CLI on the developer machine. The CLI reads pending PDFs and metadata from Neon, processes them locally, writes parsed/provenance/extraction/embedding records back to Neon, and marks them `needs_review`. Admin approval is required before documents enter normal retrieval. No uploaded file or generated index depends on Render's ephemeral filesystem.
+- **Ingestion execution:** Admin upload through the deployed UI is real and durable. Parsing/chunking runs through the local ingestion CLI; approved document chunks are embedded with the separate local `python -m app.embed` command. Parsed provenance and embedding records are stored in Neon. Admin approval is required before chunks enter retrieval. No uploaded file or generated index depends on Render's ephemeral filesystem.
 - **Evaluation/tests:** pytest for backend/parser/retrieval/auth/citation/evidence behavior; frontend checks as appropriate. Store a versioned 20–30 question evaluation manifest with verified expected values and source locations. Record accuracy, latency, retrieval results by method/question type, and extraction accuracy. Defer token usage measurement until optional Gemini synthesis is enabled.
 - **Secrets:** Environment variables for Neon connection string, Firebase project/service credentials, and deployment configuration. Privileged Firebase credentials exist only in local admin tooling or protected server secrets; never in React or source control.
 
@@ -33,7 +33,7 @@ This plan records the agreed technology direction and tracks implementation. The
 ### Phase 1 — Corpus and runnable project skeleton
 
 - **Completed project setup:** Six PDFs have been received, provisionally classified in `ARCHITECTURE.md`, and recorded with available file identity/provenance fields in `data/source-documents/received/metadata.json`. Unknown metadata remains null; the files are the provisional development corpus but remain unverified as SBCs/public sources.
-- **Scaffold added:** React + TypeScript + Vite frontend with Firebase email/password registration/sign-in, admin document upload/review and benefits review, and placeholder Playground/Evaluation pages. Admin navigation reads the Firebase custom claim for presentation; server authorization remains authoritative. FastAPI chat currently abstains because no retrieval pipeline is connected.
+- **Scaffold added:** React + TypeScript + Vite frontend with Firebase email/password registration/sign-in, admin document upload/review, benefit review, retrieval playground, and evaluation controls. Admin navigation reads the Firebase custom claim for presentation; server authorization remains authoritative. FastAPI chat currently abstains pending Phase 5 answer integration.
 - [x] Establish a small Python backend and React TypeScript frontend layout; ingestion/evaluation/test directories will be added with those phases.
 - [x] Add dependency/configuration files, local development instructions, `.env.example` containing names only, and ignores for secrets/build outputs.
 - [x] Add Firebase registration/sign-in and FastAPI ID-token verification; Neon relational schema/migration with ordinary embedding values and no pgvector; FastAPI health/API skeleton; local admin-claim bootstrap command; and Render Blueprint without embedded secrets. Protect each authenticated/admin route when it is introduced.
@@ -73,14 +73,14 @@ This plan records the agreed technology direction and tracks implementation. The
 
 ### Phase 4 — BM25 and semantic retrieval baselines
 
-- [ ] Generate sentence-transformer embeddings locally for approved chunks and persist them with chunk IDs/model version in Neon; build the FAISS search index in the API process from approved embeddings and refresh it after approval or ingestion changes.
-- [ ] Add plan/document/section filtering without losing provenance.
-- [ ] Create 20–30 evaluation questions with manually checked expected evidence locations, answer labels, and question types drawn from the six provisional documents; label results provisional and corpus-scoped.
-- [ ] Measure the four retrieval/chunking combinations independently (e.g. supporting evidence in top-k) on identical evaluation questions and compare by question type.
-- [ ] Add an admin-only evaluation playground for selecting BM25 or semantic search and fixed-size or semantic/section-aware chunks; show answer/citation diagnostics and detailed result traces to admins.
-- [ ] Record latency and retrieval scores; select runtime retrieval behavior from measured results, retaining both methods for comparison.
+- [x] Implement local sentence-transformer embedding generation for approved chunks and persist vectors with chunk IDs/model version in Neon; construct the FAISS index in the API process from approved embeddings for semantic searches.
+- [x] Add plan/document/section filtering without losing provenance.
+- [ ] Create 20–30 evaluation questions with manually checked expected evidence locations, answer labels, and question types drawn from the six provisional documents; label results provisional and corpus-scoped. The manifest and runner are in place, but labels must be authored after reviewing actual ingested documents.
+- [x] Implement four-combination evaluation over the same manifest and persist aggregate/per-question metrics without retaining question text.
+- [x] Add an admin-only evaluation playground for selecting BM25 or semantic search and fixed-size or semantic/section-aware chunks, plus detailed ranked evidence traces.
+- [x] Record latency and retrieval scores per question/configuration; select runtime retrieval behavior from measured results, retaining both methods for comparison. Runtime selection remains pending actual labeled runs.
 
-**Milestone:** Reproducible provisional retrieval results explain where BM25 and semantic search help or fail on the supplied corpus.
+**Milestone:** Retrieval, playground, and reproducible evaluation runner are implemented. Provisional retrieval findings remain pending reviewed parser output, the 20–30 manually labeled questions, and actual runs.
 
 ### Phase 5 — Authenticated answer flow and diagnostics
 

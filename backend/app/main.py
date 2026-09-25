@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import os
+import json
+import hashlib
+import time
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -15,10 +18,11 @@ from pydantic import BaseModel, Field
 import psycopg
 from psycopg.rows import dict_row
 
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+
 from app.benefits import extract_candidates
 from app.ingestion import parse_pdf
-
-load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+from app.retrieval import EmbeddingDataError, MODEL_NAME, MODEL_VERSION, model_fingerprint, retrieve
 
 app = FastAPI(title="SBC Assistant API", version="0.1.0")
 origins = [
@@ -114,9 +118,239 @@ class DocumentReview(BaseModel):
     review_status: Literal["approved", "rejected"]
 
 
+class RetrievalRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+    method: Literal["bm25", "semantic"]
+    chunk_strategy: Literal["fixed_size", "section_aware"]
+    strategy_version: int = Field(default=1, ge=1)
+    top_k: int = Field(default=5, ge=1, le=20)
+    plan_id: int | None = Field(default=None, gt=0)
+    document_id: int | None = Field(default=None, gt=0)
+    section: str | None = Field(default=None, max_length=200)
+
+
+class EvaluationQuestion(BaseModel):
+    question_id: str
+    question: str
+    question_type: str
+    expected_answer: str
+    expected_document_ids: list[int] = Field(min_length=1)
+    expected_pages: list[int] = Field(default_factory=list)
+
+
+def run_retrieval(connection, request: RetrievalRequest) -> dict:
+    try:
+        result = retrieve(connection, request.question, request.method,
+                          request.chunk_strategy, request.top_k, request.strategy_version, request.plan_id,
+                          request.document_id, request.section)
+    except EmbeddingDataError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (ImportError, OSError) as exc:
+        raise HTTPException(status_code=503, detail=f"Retrieval dependency/model unavailable: {type(exc).__name__}.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if request.method == "semantic" and result.get("index_status") == "no_approved_embeddings":
+        result["index_status"] = "no_approved_embeddings; run python -m app.embed locally after document approval"
+    return result
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "sbc-assistant-api"}
+
+
+@app.post("/api/admin/retrieval/search")
+def retrieval_search(
+    request: RetrievalRequest,
+    _admin: Annotated[dict, Depends(require_admin)],
+    connection: Annotated[psycopg.Connection, Depends(database_connection)],
+) -> dict:
+    result = run_retrieval(connection, request)
+    # Internal plan/document identifiers and score traces are admin-only.
+    return {**result, "model_name": MODEL_NAME, "model_version": MODEL_VERSION}
+
+
+@app.get("/api/admin/evaluation")
+def get_evaluation(
+    _admin: Annotated[dict, Depends(require_admin)],
+    connection: Annotated[psycopg.Connection, Depends(database_connection)],
+) -> dict:
+    manifest_path = Path(__file__).resolve().parents[2] / "evaluation" / "questions.json"
+    try:
+        manifest_bytes = manifest_path.read_bytes()
+        manifest = json.loads(manifest_bytes)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=503, detail="Evaluation manifest is unavailable or invalid.") from exc
+    runs = connection.execute(
+        """SELECT run_id, manifest_version, retrieval_method, chunk_strategy,
+                  manifest_sha256, chunk_strategy_version, top_k, question_count, hit_count,
+                  mean_latency_ms, mean_reciprocal_rank, embedding_model_name,
+                  embedding_model_version, embedding_model_fingerprint,
+                  corpus_snapshot, model_initialization_ms, mean_corpus_load_ms,
+                  mean_embedding_load_ms, mean_index_build_ms, mean_query_embedding_ms,
+                  mean_model_load_ms, mean_search_ms, created_at
+           FROM evaluation_runs ORDER BY created_at DESC LIMIT 20"""
+    ).fetchall()
+    return {"manifest_version": manifest.get("manifest_version"),
+            "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+            "corpus": manifest.get("corpus"), "question_count": len(manifest.get("questions", [])),
+            "runs": [dict(row) for row in runs]}
+
+
+@app.post("/api/admin/evaluation/run")
+def run_evaluation(
+    _admin: Annotated[dict, Depends(require_admin)],
+    connection: Annotated[psycopg.Connection, Depends(database_connection)],
+    top_k: int = 5,
+    method: Literal["all", "bm25", "semantic"] = "all",
+) -> dict:
+    if not 1 <= top_k <= 20:
+        raise HTTPException(status_code=422, detail="top_k must be between 1 and 20.")
+    manifest_path = Path(__file__).resolve().parents[2] / "evaluation" / "questions.json"
+    try:
+        manifest_bytes = manifest_path.read_bytes()
+        manifest = json.loads(manifest_bytes)
+        questions = [EvaluationQuestion.model_validate(item) for item in manifest.get("questions", [])]
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail="Evaluation manifest is unavailable or invalid.") from exc
+    if not questions:
+        raise HTTPException(status_code=409, detail="Add manually checked questions and evidence labels to evaluation/questions.json first.")
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    strategy_version = 1
+    readiness = connection.execute(
+        """SELECT c.chunk_strategy, count(*) AS chunk_count
+           FROM chunks c JOIN documents d USING (document_id)
+           WHERE d.review_status = 'approved' AND c.strategy_version = %s
+           GROUP BY c.chunk_strategy""", (strategy_version,)
+    ).fetchall()
+    counts = {row["chunk_strategy"]: row["chunk_count"] for row in readiness}
+    if any(counts.get(strategy, 0) == 0 for strategy in ("fixed_size", "section_aware")):
+        raise HTTPException(status_code=409, detail="Approved strategy-version-1 chunks must exist for both chunk strategies before evaluation.")
+    methods = ("bm25", "semantic") if method == "all" else (method,)
+    initialization_ms = 0.0
+    fingerprint = None
+    if "semantic" in methods:
+        model_init_start = time.perf_counter()
+        try:
+            fingerprint = model_fingerprint()
+        except (ImportError, OSError) as exc:
+            raise HTTPException(status_code=503, detail="Semantic model is unavailable; BM25-only evaluation remains available with method=bm25.") from exc
+        initialization_ms = (time.perf_counter() - model_init_start) * 1000
+        embeddings = connection.execute(
+            """SELECT c.chunk_strategy, count(e.embedding_id) AS embedding_count
+               FROM chunks c JOIN documents d USING (document_id)
+               LEFT JOIN chunk_embeddings e ON e.chunk_id = c.chunk_id
+                 AND e.model_name = %s AND e.model_version = %s AND e.model_fingerprint = %s
+               WHERE d.review_status = 'approved' AND c.strategy_version = %s
+               GROUP BY c.chunk_strategy""", (MODEL_NAME, MODEL_VERSION, fingerprint, strategy_version)
+        ).fetchall()
+        embedded_counts = {row["chunk_strategy"]: row["embedding_count"] for row in embeddings}
+        if any(embedded_counts.get(strategy, 0) != counts.get(strategy, 0)
+               for strategy in ("fixed_size", "section_aware")):
+            raise HTTPException(status_code=409, detail="Semantic evaluation needs current model-fingerprinted embeddings for every approved chunk. BM25-only evaluation remains available with method=bm25.")
+    approved_documents = connection.execute(
+        """SELECT document_id, document_sha256, reviewed_at FROM documents
+           WHERE review_status = 'approved' ORDER BY document_id"""
+    ).fetchall()
+    chunk_versions = connection.execute(
+        """SELECT c.chunk_strategy, c.strategy_version, count(*) AS chunk_count,
+                  string_agg(c.chunk_id::text || ':' || md5(c.chunk_text), ',' ORDER BY c.chunk_id) AS chunk_digests
+           FROM chunks c JOIN documents d USING (document_id)
+           WHERE d.review_status = 'approved'
+           GROUP BY c.chunk_strategy, c.strategy_version
+           ORDER BY c.chunk_strategy, c.strategy_version"""
+    ).fetchall()
+    corpus_snapshot = {"approved_documents": [
+                           {"document_id": row["document_id"], "document_sha256": row["document_sha256"],
+                            "reviewed_at": row["reviewed_at"].isoformat() if row["reviewed_at"] else None}
+                           for row in approved_documents],
+                       "chunk_versions": [
+                           {"chunk_strategy": row["chunk_strategy"],
+                            "strategy_version": row["strategy_version"],
+                            "chunk_count": row["chunk_count"],
+                            "content_sha256": hashlib.sha256((row["chunk_digests"] or "").encode()).hexdigest()}
+                           for row in chunk_versions]}
+    matrix = []
+    for method in methods:
+        for strategy in ("fixed_size", "section_aware"):
+            observations = []
+            for item in questions:
+                result = run_retrieval(connection, RetrievalRequest(
+                    question=item.question, method=method, chunk_strategy=strategy,
+                    strategy_version=strategy_version, top_k=top_k
+                ))
+                if result.get("index_status"):
+                    raise HTTPException(status_code=409, detail="Semantic embeddings are missing. Approve documents and run python -m app.embed before evaluation.")
+                rank = next((row["rank"] for row in result["results"]
+                             if row["document_id"] in item.expected_document_ids
+                             and (not item.expected_pages or
+                                  (row["page_start"] is not None and any(
+                                      row["page_start"] <= page <= (row["page_end"] or row["page_start"])
+                                      for page in item.expected_pages)))), None)
+                observations.append({"question": item, "hit": rank is not None,
+                                     "rr": 1 / rank if rank else 0.0,
+                                     "timings": result["timings"],
+                                     "ids": [row["chunk_id"] for row in result["results"]]})
+            n = len(observations)
+            hits = sum(row["hit"] for row in observations)
+            mrr = sum(row["rr"] for row in observations) / n
+            timing_names = ("total_request_ms", "corpus_load_ms", "embedding_load_ms",
+                            "index_build_ms", "query_embedding_ms", "model_load_ms", "search_ms")
+            timing_means = {name: sum(row["timings"].get(name, 0.0) for row in observations) / n
+                            for name in timing_names}
+            with connection.transaction():
+                run = connection.execute(
+                    """INSERT INTO evaluation_runs
+                       (manifest_version, retrieval_method, chunk_strategy, top_k,
+                        question_count, hit_count, mean_latency_ms, mean_reciprocal_rank,
+                        manifest_sha256, embedding_model_name, embedding_model_version, corpus_snapshot,
+                        embedding_model_fingerprint, model_initialization_ms,
+                        chunk_strategy_version, mean_corpus_load_ms, mean_embedding_load_ms,
+                        mean_index_build_ms, mean_query_embedding_ms, mean_model_load_ms, mean_search_ms)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                       RETURNING run_id""",
+                    (manifest["manifest_version"], method, strategy, top_k, n, hits,
+                     timing_means["total_request_ms"], mrr,
+                     manifest_sha256,
+                     MODEL_NAME if method == "semantic" else None,
+                     MODEL_VERSION if method == "semantic" else None,
+                     psycopg.types.json.Jsonb(corpus_snapshot), fingerprint if method == "semantic" else None,
+                     initialization_ms if method == "semantic" else 0.0, strategy_version,
+                     timing_means["corpus_load_ms"], timing_means["embedding_load_ms"],
+                     timing_means["index_build_ms"], timing_means["query_embedding_ms"],
+                     timing_means["model_load_ms"], timing_means["search_ms"]),
+                ).fetchone()
+                for observation in observations:
+                    item = observation["question"]
+                    connection.execute(
+                        """INSERT INTO evaluation_results
+                           (run_id, question_id, question_type, hit, reciprocal_rank, latency_ms,
+                            retrieved_chunk_ids, corpus_load_ms, embedding_load_ms, index_build_ms,
+                            query_embedding_ms, model_load_ms, search_ms)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        (run["run_id"], item.question_id, item.question_type, observation["hit"],
+                         observation["rr"], observation["timings"]["total_request_ms"], observation["ids"],
+                         observation["timings"]["corpus_load_ms"], observation["timings"].get("embedding_load_ms", 0),
+                         observation["timings"].get("index_build_ms", 0),
+                         observation["timings"].get("query_embedding_ms", 0),
+                         observation["timings"].get("model_load_ms", 0), observation["timings"]["search_ms"]),
+                    )
+            matrix.append({"run_id": run["run_id"], "method": method, "chunk_strategy": strategy,
+                           "question_count": n, "hit_rate": hits / n, "mean_reciprocal_rank": mrr,
+                           "mean_latency_ms": timing_means["total_request_ms"],
+                           "timings": timing_means,
+                           "by_question_type": [
+                               {"question_type": question_type,
+                                "question_count": len(group),
+                                "hit_rate": sum(row["hit"] for row in group) / len(group),
+                                "mean_reciprocal_rank": sum(row["rr"] for row in group) / len(group),
+                                "mean_latency_ms": sum(row["timings"]["total_request_ms"] for row in group) / len(group)}
+                               for question_type in sorted({row["question"].question_type for row in observations})
+                               for group in [[row for row in observations if row["question"].question_type == question_type]]
+                           ]})
+    return {"manifest_version": manifest["manifest_version"], "manifest_sha256": manifest_sha256,
+            "corpus": manifest.get("corpus"),
+            "model_initialization_ms": initialization_ms, "results": matrix}
 
 
 @app.post("/api/chat", response_model=ChatResponse)
