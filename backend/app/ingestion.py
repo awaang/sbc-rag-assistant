@@ -31,6 +31,28 @@ def _is_heading(line: str) -> bool:
     return line.isupper() or bool(re.match(r"^\d+(?:\.\d+)*\s+[A-Z]", line))
 
 
+def _header_index(rows: list[list[str]]) -> int | None:
+    """Recognize a short column-label row; retain every raw row regardless."""
+    best: tuple[int, int] | None = None
+    for index, row in enumerate(rows[:5]):
+        cells = [cell for cell in row if cell]
+        if len(cells) < 2 or max(map(len, cells)) > 100 or any("?" in cell for cell in cells):
+            continue
+        score = sum(bool(re.search(r"\b(network|coverage|benefits|features|amounts|pay)\b", cell, re.I))
+                    for cell in cells)
+        if score and (best is None or score > best[0]):
+            best = (score, index)
+    return best[1] if best else None
+
+
+def iter_table_rows(table: dict[str, Any]):
+    """Yield all extracted rows with headers only after a detected header row."""
+    header_index = table.get("header_row_index")
+    for index, row in enumerate(table["rows"]):
+        headers = table["headers"] if header_index is None or index > header_index else []
+        yield index + 1, headers, row
+
+
 def parse_pdf(pdf_bytes: bytes) -> list[dict[str, Any]]:
     """Return page text and table cells without discarding table structure."""
     parsed: list[dict[str, Any]] = []
@@ -43,7 +65,10 @@ def parse_pdf(pdf_bytes: bytes) -> list[dict[str, Any]]:
                 rows = [row for row in rows if any(row)]
                 if not rows:
                     continue
-                tables.append({"headers": rows[0], "rows": rows[1:]})
+                header_index = _header_index(rows)
+                tables.append({"headers": rows[header_index] if header_index is not None else [],
+                               "header_row_index": header_index if header_index is not None else -1,
+                               "rows": rows})
             parsed.append({"page_number": page_number, "text": raw_text, "tables": tables})
     if not parsed:
         raise ValueError("The PDF contains no pages.")
@@ -63,13 +88,12 @@ def _units(pages: list[dict[str, Any]]) -> list[Unit]:
                 section = line
             units.append(Unit(line, page_number, section, {"kind": "text", "line": line_number}))
         for table_number, table in enumerate(page["tables"], 1):
-            headers = table["headers"]
-            header_text = " | ".join(headers)
-            for row_number, row in enumerate(table["rows"], 1):
+            for row_number, headers, row in iter_table_rows(table):
+                header_text = " | ".join(headers)
                 cells = [f"{headers[i] if i < len(headers) and headers[i] else f'Column {i + 1}'}: {cell}" for i, cell in enumerate(row) if cell]
                 if not cells:
                     continue
-                rendered = f"Table headers: {header_text}\n" + " | ".join(cells)
+                rendered = (f"Table headers: {header_text}\n" if header_text else "") + " | ".join(cells)
                 units.append(Unit(rendered, page_number, section, {
                     "kind": "table_row", "table_number": table_number,
                     "row_number": row_number, "headers": headers, "cells": row,

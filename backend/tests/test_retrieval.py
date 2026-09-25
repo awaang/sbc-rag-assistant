@@ -128,10 +128,12 @@ def test_semantic_embedding_query_applies_the_same_filters_as_chunks(monkeypatch
     embedding_sql, params = connection.calls[1]
     chunk_sql, chunk_params = connection.calls[0]
     assert "d.plan_id = %s" in chunk_sql
+    assert "d.corpus_status <> 'ineligible'" in chunk_sql
     assert "d.document_id = %s" in chunk_sql
     assert "c.provenance::text ILIKE %s" in chunk_sql
     assert chunk_params[-3:] == (10, 20, "%Deductible%")
     assert "d.plan_id = %s" in embedding_sql
+    assert "d.corpus_status <> 'ineligible'" in embedding_sql
     assert "d.document_id = %s" in embedding_sql
     assert "c.provenance::text ILIKE %s" in embedding_sql
     assert params[-3:] == (10, 20, "%Deductible%")

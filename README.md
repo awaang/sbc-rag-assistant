@@ -67,7 +67,7 @@ To create the relational schema in Neon, run this after setting `DATABASE_URL`:
 python -m app.db.migrate
 ```
 
-The migrations create the plan, document, parsed-page/table, chunk, benefit-record, ordinary embedding-value, and evaluation result tables. Embeddings use PostgreSQL `DOUBLE PRECISION[]`; migrations do not install or use pgvector. Migrations `004` and `005` store evaluation metrics and provenance snapshots, per-question timing breakdowns, and model fingerprints, without question text. Migration `005` adds the embedding integrity fingerprint and expanded reproducibility/timing fields. Run `python -m app.db.migrate` after pulling schema changes. Admin retrieval endpoints remain separate from ordinary chat.
+The migrations create the plan, document, parsed-page/table, chunk, benefit-record, ordinary embedding-value, and evaluation result tables. Embeddings use PostgreSQL `DOUBLE PRECISION[]`; migrations do not install or use pgvector. Migrations `004` and `005` store evaluation metrics and provenance snapshots, per-question timing breakdowns, and model fingerprints, without question text. Migration `006` records reviewer confirmation of benefit source sections. Existing verified benefits must be reviewed and saved again before answering. Run `python -m app.db.migrate` after pulling schema changes. Admin retrieval endpoints remain separate from ordinary chat.
 
 ### Upload and ingest documents
 
@@ -85,6 +85,8 @@ The command downloads pending PDFs from Neon, parses page text and table cells w
 python -m app.embed
 ```
 
+The revised parser retains all extracted table rows, including rows before and at a detected header. To refresh a previously ingested document, run `python -m app.ingest --reprocess-id DOCUMENT_ID` locally. This removes its old chunks, embeddings, parsed pages, and benefit reviews, then returns the document to **needs review**. Inspect and approve it again, re-extract and review benefit candidates, and run `python -m app.embed` after approval.
+
 The first run downloads the configured sentence-transformer model if it is not cached. Parsing and embedding use local CPU/memory; Render does not run ingestion.
 
 ### Retrieval playground and evaluation
@@ -100,6 +102,8 @@ Backend parser, candidate extraction, and admin upload/authentication tests are 
 `POST /api/chat` requires a Firebase ID token. The request accepts `question`, optional `context_plan_ids`, and optional `previous_question` for short follow-ups. The browser sends only the latest in-memory context; the server keeps no transcript. Responses include `answered`, `clarification_needed`, or `insufficient_evidence`, matched plan names, citations with plan/section/page/document when available, and basic diagnostics. Admins receive evidence IDs and retrieval ranks in the response diagnostics. `GET /api/plans` lists plans with approved provisional documents; `POST /api/admin/answer/preview` accepts the chat fields plus `method` and `chunk_strategy`; `GET /api/admin/answer-health` reports document, parse, benefit-review, chunk, and embedding counts to admins.
 
 Numerical deductible, emergency room cost-sharing, copay, and out-of-pocket questions use only verified benefit records from approved documents. A usable record needs one unambiguous stated value and a source section. Incomparable dimensions, conflicts, missing review, or missing provenance cause clarification or abstention. Broader coverage questions quote a matching source row from approved chunks with a traceable section and page; multiple differing rows require clarification. This is conservative by design and may abstain until parser output and benefit reviews are completed. Document approval makes a candidate usable for provisional answers; it does not qualify it as an SBC or establish a public source.
+
+The source section must now be confirmed during benefit review. Pending or ambiguous candidates in the requested context block numerical answers. Lower/higher comparisons identify a plan only when reviewed values have comparable units; comparisons across medical, dental, and vision coverage types require clarification. Retrieval excludes documents marked ineligible.
 
 `ANSWER_RETRIEVAL_METHOD` defaults to `bm25` and `ANSWER_CHUNK_STRATEGY` to `section_aware` for broader chat questions. These are provisional settings, not measured winners. Set both on the API service after the labeled comparison identifies a default. Semantic chat retrieval also requires current local embeddings. The current retrieval implementation loads approved evidence and builds the search index during each request; startup caching and deployment memory checks remain open.
 

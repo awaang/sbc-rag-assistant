@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import time
+from decimal import Decimal
 from typing import Any
 
 from app.retrieval import retrieve, tokenize
@@ -113,6 +114,16 @@ def _value(record: dict) -> str | None:
     return next(iter(values))
 
 
+def _ordered_value(value: str) -> tuple[str, Decimal] | None:
+    if value.startswith("$"):
+        return "dollars", Decimal(value[1:].replace(",", ""))
+    if value.endswith("%"):
+        return "percent", Decimal(value[:-1])
+    if value in {"nocharge", "nodeductible"}:
+        return "dollars", Decimal(0)
+    return None
+
+
 def _citation(record: dict) -> dict:
     return {"plan": record["plan_name"], "section": record["section"],
             "page": record.get("page_number"), "document": record["original_filename"]}
@@ -147,8 +158,9 @@ def _benefits(connection, plan_ids: list[int], category: str) -> list[dict]:
     rows = connection.execute(
         """SELECT b.benefit_id, b.plan_id, b.category, b.value_text, b.dimensions,
                   b.verification_status, b.reviewed_at, b.source_section,
+                  b.source_section_verified,
                   pg.page_number, pg.parse_status,
-                  COALESCE(NULLIF(b.source_section, ''), NULLIF(pg.section_heading, '')) AS section,
+                  NULLIF(b.source_section, '') AS section,
                   d.document_id, d.original_filename, p.plan_name
            FROM benefit_records b JOIN documents d USING (document_id)
            JOIN plans p ON p.plan_id = b.plan_id
@@ -179,9 +191,12 @@ def _numeric_answer(connection, question: str, plans: list[dict], category: str,
         verified = [row for row in candidates if row["verification_status"] == "verified"]
         if any(row["verification_status"] == "conflicting" for row in candidates):
             reasons.append(f"{_display(plan)} has conflicting reviewed values")
+        elif any(row["verification_status"] in {"pending_review", "ambiguous"} for row in candidates):
+            reasons.append(f"{_display(plan)} has unresolved benefit candidates for this question")
         elif not verified:
             reasons.append(f"{_display(plan)} has no verified value for this question")
-        elif any(not row["section"] or not _value(row) or not row["reviewed_at"]
+        elif any(not row["section"] or not row["source_section_verified"]
+                 or not _value(row) or not row["reviewed_at"]
                  or (row["parse_status"] is not None and row["parse_status"] != "parsed")
                  for row in verified):
             reasons.append(f"{_display(plan)} lacks an unambiguous reviewed value or usable source provenance")
@@ -205,7 +220,19 @@ def _numeric_answer(connection, question: str, plans: list[dict], category: str,
                          details={"evidence_gate": "incomparable_dimensions"}, admin=admin)
     citations = [_citation(row) for row in selected]
     lines = [f"{row['plan_name']}: {row['value_text']}" for row in selected]
-    answer = (f"Reviewed {LABELS[category]} source wording: " + " ".join(lines) +
+    direction = re.search(r"\b(lower|less|higher|more)\b", question, re.I) if len(selected) > 1 else None
+    comparison_text = ""
+    if direction:
+        amounts = [_ordered_value(_value(row)) for row in selected]
+        if any(amount is None for amount in amounts) or len({amount[0] for amount in amounts}) != 1:
+            return _response("clarification_needed", "The reviewed values use different or nonnumeric units, so I can’t order them reliably.",
+                             plans, "verified_structured_benefits", started, admin=admin)
+        lowest = direction.group(1).lower() in {"lower", "less"}
+        target = (min if lowest else max)(amount[1] for amount in amounts)
+        winners = [row["plan_name"] for row, amount in zip(selected, amounts) if amount[1] == target]
+        comparison_text = (f"{', '.join(winners)} {'tie for the' if len(winners) > 1 else 'has the'} "
+                           f"{'lowest' if lowest else 'highest'} reviewed {LABELS[category]}. ")
+    answer = (comparison_text + f"Reviewed {LABELS[category]} source wording: " + " ".join(lines) +
               " These are from approved provisional documents; their SBC and public-source status is unverified.")
     return _response("answered", answer, plans, "verified_structured_benefits", started, citations,
                      details={"benefit_ids": [row["benefit_id"] for row in selected],
@@ -220,7 +247,7 @@ def _source_unit(chunk: dict, terms: set[str]) -> tuple[int, dict] | None:
             cells = [str(value) for value in unit.get("cells") or []]
             wording = " | ".join(f"{headers[index] if index < len(headers) else 'Column'}: {cell}"
                                  for index, cell in enumerate(cells) if cell)
-            section = unit.get("section") or " | ".join(header for header in headers if header)
+            section = " | ".join(header for header in headers if header) or unit.get("section")
         else:
             wording = str(unit.get("line") or "")
             section = unit.get("section")
@@ -301,7 +328,7 @@ def answer_question(connection, question: str, context_plan_ids: list[int] | Non
     )
     if explicit:
         selected = explicit
-    elif comparison and not COMPARISON.search(question) and context_plan_ids:
+    elif comparison and context_plan_ids and not re.search(r"\b(?:all|across all)\b", question, re.I):
         selected = [plan for plan in plans if plan["plan_id"] in context_plan_ids]
     elif comparison:
         selected = plans
@@ -311,6 +338,10 @@ def answer_question(connection, question: str, context_plan_ids: list[int] | Non
         selected = plans
     else:
         selected = []
+    requested_coverages = {coverage for coverage in ("medical", "dental", "vision")
+                           if re.search(rf"\b{coverage}\b", question, re.I)}
+    if comparison and not explicit and len(requested_coverages) == 1:
+        selected = [plan for plan in selected if plan["coverage_type"] in requested_coverages]
     if not selected:
         return _response("clarification_needed", "Which plan do you mean? Available approved plans: " +
                          "; ".join(_display(plan) for plan in plans) + ".", [], "plan_resolution", started,
@@ -322,10 +353,13 @@ def answer_question(connection, question: str, context_plan_ids: list[int] | Non
     if comparison and len(selected) < 2:
         return _response("clarification_needed", "Name at least two plans to compare, or ask to compare across all approved plans.",
                          selected, "plan_resolution", started, admin=admin)
+    if comparison and len({plan["coverage_type"] for plan in selected}) > 1:
+        return _response("clarification_needed", "These plans have different coverage types (medical, dental, or vision). Name plans with the same coverage type to compare.",
+                         selected, "plan_resolution", started, admin=admin)
     category = _category(question)
     followup = bool(re.match(r"^(what about|how about|and\b|for\b)", question.strip(), re.I)) or not re.match(
         r"^(what|how|does|do|is|are|can|which|compare|tell)\b", question.strip(), re.I)
-    if not category and previous_question and len(question.split()) <= 8 and followup:
+    if not category and previous_question and len(question.split()) <= 8 and (followup or COMPARISON.search(question)):
         category = _category(previous_question)
         question = previous_question + " " + question
     if category:

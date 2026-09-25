@@ -43,7 +43,7 @@ Use all six supplied files for development and provisional evaluation, including
 
 1. An admin uploads a PDF and descriptive metadata in React.
 2. FastAPI verifies the Firebase ID token and admin claim, checks the PDF signature and a 15 MB default upload limit (`MAX_UPLOAD_BYTES` can override it), and stores the original PDF and upload record in Neon. Status begins as `uploaded`; `corpus_status` remains `candidate`.
-3. A local ingestion CLI (`python -m app.ingest`), run by the project maintainer, fetches uploaded PDFs from Neon. pdfplumber extracts page text and table cells; table headers and rows are stored in `document_pages.tables_json`. It creates both fixed-size and section-aware chunks with table rows kept intact and page/section/table-row provenance in `chunks.provenance`.
+3. A local ingestion CLI (`python -m app.ingest`), run by the project maintainer, fetches uploaded PDFs from Neon. pdfplumber extracts page text and table cells; all rows, any detected header position, and column labels are stored in `document_pages.tables_json`. It creates both fixed-size and section-aware chunks with table rows kept intact and page/section/table-row provenance in `chunks.provenance`.
 4. The ingestion process records unreadable-page or parser errors and moves the document to `needs_review`; extracted benefit records remain unverified.
 5. An admin inspects parsed pages/chunks and approves or rejects the document. This review status is separate from SBC qualification: approval allows a document into the provisional development corpus but does not establish SBC status or public availability. Benefit values have their own review state. Only approved documents/chunks and verified benefit values may enter normal answer retrieval.
 
@@ -58,6 +58,8 @@ For parsed pages/rows/chunks retain document/plan IDs, stable record IDs, page, 
 Structured benefit records store the value exactly as stated, category, plan/document identity, network and individual/family distinctions when present, source section/page/row, reviewer status, and missing/ambiguous/conflicting status. Initial categories are deductible, ER cost sharing, copays, and out-of-pocket maximum. Missing data is never represented as zero.
 
 The current extraction implementation prefers detected table rows, falling back to page text where tables are unavailable, to create review candidates for those four categories when a plausible amount or percentage is present. It preserves the full source row as `value_text`, page/section provenance, and recognizable dimensions; distinct values in one row are marked ambiguous. This conservative helper is not a substitute for table-aware human review and does not verify values. Admin-only `/api/admin/benefits` endpoints and the Benefits review page support extraction, inspection, correction, section/dimension editing, and explicit status changes. The answer path exposes only `verified` values from approved documents. Measure extraction quality against manually checked labels from the provisional corpus and label results accordingly.
+
+Reviewer confirmation of the source section is stored separately from the extracted page heading. Numeric answers abstain while candidates in the requested context remain unresolved. Retrieval and embedding exclude documents marked ineligible.
 
 ## Retrieval and question-answer flow
 

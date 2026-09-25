@@ -22,7 +22,7 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 from app.benefits import extract_candidates
 from app.answering import answer_question
-from app.ingestion import parse_pdf
+from app.ingestion import iter_table_rows, parse_pdf
 from app.retrieval import EmbeddingDataError, MODEL_NAME, MODEL_VERSION, model_fingerprint, retrieve
 
 app = FastAPI(title="SBC Assistant API", version="0.1.0")
@@ -234,7 +234,8 @@ def run_evaluation(
     readiness = connection.execute(
         """SELECT c.chunk_strategy, count(*) AS chunk_count
            FROM chunks c JOIN documents d USING (document_id)
-           WHERE d.review_status = 'approved' AND c.strategy_version = %s
+           WHERE d.review_status = 'approved' AND d.corpus_status <> 'ineligible'
+             AND c.strategy_version = %s
            GROUP BY c.chunk_strategy""", (strategy_version,)
     ).fetchall()
     counts = {row["chunk_strategy"]: row["chunk_count"] for row in readiness}
@@ -255,7 +256,8 @@ def run_evaluation(
                FROM chunks c JOIN documents d USING (document_id)
                LEFT JOIN chunk_embeddings e ON e.chunk_id = c.chunk_id
                  AND e.model_name = %s AND e.model_version = %s AND e.model_fingerprint = %s
-               WHERE d.review_status = 'approved' AND c.strategy_version = %s
+               WHERE d.review_status = 'approved' AND d.corpus_status <> 'ineligible'
+                 AND c.strategy_version = %s
                GROUP BY c.chunk_strategy""", (MODEL_NAME, MODEL_VERSION, fingerprint, strategy_version)
         ).fetchall()
         embedded_counts = {row["chunk_strategy"]: row["embedding_count"] for row in embeddings}
@@ -264,13 +266,13 @@ def run_evaluation(
             raise HTTPException(status_code=409, detail="Semantic evaluation needs current model-fingerprinted embeddings for every approved chunk. BM25-only evaluation remains available with method=bm25.")
     approved_documents = connection.execute(
         """SELECT document_id, document_sha256, reviewed_at FROM documents
-           WHERE review_status = 'approved' ORDER BY document_id"""
+           WHERE review_status = 'approved' AND corpus_status <> 'ineligible' ORDER BY document_id"""
     ).fetchall()
     chunk_versions = connection.execute(
         """SELECT c.chunk_strategy, c.strategy_version, count(*) AS chunk_count,
                   string_agg(c.chunk_id::text || ':' || md5(c.chunk_text), ',' ORDER BY c.chunk_id) AS chunk_digests
            FROM chunks c JOIN documents d USING (document_id)
-           WHERE d.review_status = 'approved'
+           WHERE d.review_status = 'approved' AND d.corpus_status <> 'ineligible'
            GROUP BY c.chunk_strategy, c.strategy_version
            ORDER BY c.chunk_strategy, c.strategy_version"""
     ).fetchall()
@@ -462,7 +464,7 @@ def list_benefits(
         f"""SELECT b.benefit_id, b.plan_id, p.plan_name, d.document_id,
                    d.original_filename, d.corpus_status, b.category, b.value_text,
                    b.dimensions, b.source_page_id, pg.page_number, b.source_section,
-                   b.verification_status
+                   b.source_section_verified, b.verification_status
             FROM benefit_records b JOIN plans p USING (plan_id)
             JOIN documents d USING (document_id)
             LEFT JOIN document_pages pg ON pg.page_id = b.source_page_id
@@ -493,8 +495,7 @@ def extract_document_benefits(
         page = dict(row)
         table_lines = []
         for table in page.pop("tables_json") or []:
-            headers = table.get("headers", [])
-            for cells in table.get("rows", []):
+            for _, headers, cells in iter_table_rows(table):
                 table_lines.append(" | ".join(
                     f"{headers[index] if index < len(headers) and headers[index] else f'Column {index + 1}'}: {cell}"
                     for index, cell in enumerate(cells) if cell
@@ -655,13 +656,17 @@ def review_benefit(
     admin: Annotated[dict, Depends(require_admin)],
     connection: Annotated[psycopg.Connection, Depends(database_connection)],
 ) -> dict:
+    section = review.source_section.strip() if review.source_section else None
+    if review.verification_status == "verified" and not section:
+        raise HTTPException(status_code=422, detail="Confirm a relevant source section before verifying a benefit.")
     row = connection.execute(
         """UPDATE benefit_records SET value_text = %s, dimensions = %s,
                    source_section = COALESCE(%s, source_section),
+                   source_section_verified = %s,
                    verification_status = %s, reviewer_firebase_uid = %s, reviewed_at = now()
            WHERE benefit_id = %s RETURNING benefit_id, verification_status, value_text, dimensions""",
         (review.value_text, psycopg.types.json.Jsonb(review.dimensions),
-         review.source_section.strip() if review.source_section and review.source_section.strip() else None,
+         section, review.verification_status == "verified",
          review.verification_status, admin.get("uid"), benefit_id),
     ).fetchone()
     if not row:

@@ -1,5 +1,8 @@
+from contextlib import contextmanager
+
 import pytest
 
+from app import ingestion
 from app.ingestion import build_chunks, parse_pdf
 
 
@@ -56,3 +59,32 @@ def test_chunks_keep_missing_section_provenance_unknown():
 def test_parse_pdf_rejects_malformed_input():
     with pytest.raises(Exception):
         parse_pdf(b"not a PDF")
+
+
+def test_parse_keeps_rows_before_and_at_a_later_header(monkeypatch):
+    class Page:
+        def extract_text(self):
+            return "DENTAL BENEFITS"
+
+        def extract_tables(self):
+            return [[
+                ["", "Dental plan title", None],
+                ["What does the plan cover?", "Details about benefits", None],
+                ["", "In Network", "Out of Network"],
+                ["Deductible", "$50", "$100"],
+            ]]
+
+    @contextmanager
+    def fake_pdf(_bytes):
+        yield type("PDF", (), {"pages": [Page()]})()
+
+    monkeypatch.setattr(ingestion.pdfplumber, "open", fake_pdf)
+    pages = parse_pdf(b"%PDF-test")
+    table = pages[0]["tables"][0]
+    assert table["header_row_index"] == 2
+    assert len(table["rows"]) == 4
+    units = [unit for chunk in build_chunks(pages)["section_aware"]
+             for unit in chunk["provenance"]["units"] if unit["kind"] == "table_row"]
+    assert [unit["row_number"] for unit in units] == [1, 2, 3, 4]
+    assert units[0]["headers"] == []
+    assert units[-1]["headers"] == ["", "In Network", "Out of Network"]

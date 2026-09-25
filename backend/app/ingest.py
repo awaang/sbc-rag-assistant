@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 from pathlib import Path
 import re
@@ -35,7 +36,9 @@ def ingest_document(connection: psycopg.Connection, document: dict) -> dict:
             if not page["text"].strip() and not page["tables"]:
                 issues.append(f"Page {page['page_number']} contains no extractable text or tables (possibly scanned).")
         with connection.transaction():
+            connection.execute("DELETE FROM benefit_records WHERE document_id = %s", (document_id,))
             connection.execute("DELETE FROM chunks WHERE document_id = %s", (document_id,))
+            connection.execute("DELETE FROM document_pages WHERE document_id = %s", (document_id,))
             for page in pages:
                 readable = bool(page["text"].strip() or page["tables"])
                 connection.execute(
@@ -78,16 +81,26 @@ def ingest_document(connection: psycopg.Connection, document: dict) -> dict:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Ingest uploaded documents from Neon.")
+    parser.add_argument("--reprocess-id", type=int, help="Reparse one reviewed document and require approval again.")
+    args = parser.parse_args()
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
         raise SystemExit("DATABASE_URL is required in the repository-root .env file.")
     with psycopg.connect(database_url, row_factory=dict_row) as connection:
-        pending = connection.execute(
-            """SELECT document_id, pdf_bytes FROM documents WHERE review_status = 'uploaded'
-               ORDER BY document_id"""
-        ).fetchall()
+        if args.reprocess_id is None:
+            pending = connection.execute(
+                """SELECT document_id, pdf_bytes FROM documents WHERE review_status = 'uploaded'
+                   ORDER BY document_id"""
+            ).fetchall()
+        else:
+            pending = connection.execute(
+                """SELECT document_id, pdf_bytes FROM documents
+                   WHERE document_id = %s AND review_status IN ('approved', 'needs_review')""",
+                (args.reprocess_id,),
+            ).fetchall()
         if not pending:
-            print("No uploaded documents are waiting for ingestion.")
+            print("No eligible documents are waiting for ingestion.")
             return
         for document in pending:
             result = ingest_document(connection, document)

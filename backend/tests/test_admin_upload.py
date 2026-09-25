@@ -2,7 +2,9 @@ from contextlib import contextmanager
 
 from fastapi.testclient import TestClient
 
-from app.main import app, database_connection, require_user
+from app.main import BenefitReview, app, database_connection, require_user, review_benefit
+from fastapi import HTTPException
+import pytest
 
 
 class FakeResult:
@@ -58,3 +60,10 @@ def test_admin_routes_reject_authenticated_non_admins():
     response = TestClient(app).get("/api/admin/documents")
 
     assert response.status_code == 403
+
+
+def test_verifying_benefit_requires_confirmed_section():
+    with pytest.raises(HTTPException) as error:
+        review_benefit(1, BenefitReview(verification_status="verified", value_text="Deductible: $500"),
+                       {"uid": "admin-uid"}, FakeConnection())
+    assert error.value.status_code == 422
