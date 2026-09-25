@@ -20,15 +20,16 @@ Users must authenticate before accessing the question-answering application. Fir
 
 - Ingest exactly 6 publicly available SBC PDFs, aiming for a mix of HMO, PPO, and HDHP plans, sourced from insurer sites such as Kaiser, Aetna, and Guardian. No HDHP SBC has been identified so far; implementation may proceed, and adding an HDHP SBC remains an open corpus decision.
 - Maintain a distinction between received candidate documents and the verified six-document SBC ingestion corpus; only documents confirmed as SBCs may count toward the corpus requirement. The six currently received PDFs have been inspected and appear to be plan/benefit summaries (including dental and vision summaries), not the standardized SBC form; they do not yet satisfy this requirement.
+- Make practical use of the six supplied candidate PDFs for exploratory parsing, table handling, chunking, extraction, and pipeline development while clearly labeling them as unverified candidates. Their use for development does not make them eligible for the verified corpus or final corpus evaluation.
 - Answer questions about plan benefits and costs, including single-plan lookups and comparisons across plans.
 - Ground answers in the source documents and cite the source plan and section for every answer.
 - Avoid guessing: report low confidence or insufficient source support instead of returning an unsupported answer.
 - Compare two retrieval methods: BM25 keyword retrieval and semantic retrieval using locally generated sentence-transformer embeddings searched with FAISS.
 - Generate document and query embeddings locally with sentence-transformers; use FAISS for semantic search, with no embedding API. Persist approved document embedding values as ordinary records in Neon so the deployed API can build its in-memory FAISS index. Neon remains the durable relational store; pgvector is not used in the initial implementation.
 - Compare fixed-size chunking with semantic/section-aware chunking; evaluate both retrieval methods on both chunk sets using the same labeled questions.
-- Provide an authenticated evaluation playground where users can select a retrieval method and chunking strategy. Ordinary question-answer mode uses the configuration selected from measured results.
+- Provide an admin-only evaluation playground where admins can select a retrieval method and chunking strategy. Ordinary question-answer mode uses the configuration selected from measured results.
 - Extract key numerical benefit details into a structured per-plan schema to support reliable lookups and comparisons.
-- Evaluate the system with approximately 20–30 questions with known correct answers, measuring answer accuracy, latency, and token usage per query.
+- Evaluate the system with approximately 20–30 questions with known correct answers, measuring answer accuracy and latency per query. Token usage is deferred until the optional Gemini phrasing phase is enabled; deterministic answers have no model-token usage to report.
 - Document implementation decisions, chunking tradeoffs, retrieval results, extraction accuracy, and what would change with a real budget.
 - **Initial implementation:** use deterministic answer formatting for verified facts, comparisons, citations, clarification, and abstention. Do not integrate or call Gemini in the initial implementation.
 - **Later phase:** Gemini may be added only after the deterministic evidence-grounded answer path is implemented and evaluated, and only as an optional final phrasing step over already validated evidence. It must not select facts, fill gaps, alter citations, or override abstention. Its availability/free-tier status is not a prerequisite for the initial demo.
@@ -77,7 +78,7 @@ Users must authenticate before accessing the question-answering application. Fir
 
 5. **Evaluation and documentation**
    - Maintain an evaluation set of approximately 20–30 questions with correct answers.
-   - Measure accuracy, latency, and token usage per query, and compare BM25 with semantic retrieval.
+   - Measure answer/retrieval accuracy and latency per query, and compare BM25 with semantic retrieval. Measure token usage only if optional Gemini phrasing is enabled later.
    - Document chunking choice, retrieval results, extraction accuracy, and lessons for operating with a real budget in the repository README.
    - Evaluation metric definitions and target thresholds are **TBD**.
 
@@ -90,7 +91,7 @@ Users must authenticate before accessing the question-answering application. Fir
    - Provide a simple interface for authentication, question submission, answers or abstentions, and citations. Visual polish and additional UI features are out of scope.
    - Provide real admin PDF upload, processing status, parsed evidence/extraction review, and approval controls. The local ingestion command performs PDF parsing and embedding generation to stay within free-host resource limits.
    - Show basic diagnostics to all users and advanced diagnostics only to admins.
-   - Provide an evaluation playground to select BM25 or semantic search and fixed-size or semantic/section-aware chunks. Detailed rank and score traces remain admin-only.
+   - Provide an admin-only evaluation playground to select BM25 or semantic search and fixed-size or semantic/section-aware chunks. Detailed rank and score traces remain admin-only.
 
 ## Non-functional requirements
 
@@ -98,11 +99,11 @@ Users must authenticate before accessing the question-answering application. Fir
 - **Traceability:** Each answer must let a user identify its source plan and SBC section.
 - **Table fidelity:** Parsing and chunking must preserve table rows and the context needed to interpret benefit values.
 - **Local retrieval:** Semantic embeddings must be generated locally without requiring an embedding API.
-- **Evaluation visibility:** Retrieval quality, answer accuracy, extraction accuracy, latency, and token usage must be measurable on the evaluation set. Numeric pass thresholds are **TBD**; report baseline measurements.
+- **Evaluation visibility:** Retrieval quality, answer accuracy, extraction accuracy, and latency must be measurable on the evaluation set. Token usage is measured only if optional Gemini phrasing is enabled. Numeric pass thresholds are **TBD**; report baseline measurements.
 - **Performance targets:** Acceptable latency thresholds are **TBD**.
 - **Security:** Authentication and admin roles are enforced server-side; privileged Firebase credentials never enter browser code or source control.
 - **Deployment:** Run locally and deploy on no-card free tiers. Free-tier sleep/cold starts, quotas, and provider availability are acceptable demo limitations; uninterrupted availability is not promised.
-- **Privacy/query retention:** Query-retention policy remains **TBD**; do not retain query text by default unless explicitly needed for evaluation and documented.
+- **Privacy/query retention:** Do not retain ordinary user query text by default. The versioned 20–30-question evaluation manifest may retain its authored questions and expected answers/evidence because they are required test data; do not add live user queries to it. Store aggregate evaluation metrics and per-run identifiers/results without ordinary user query text unless a later, documented requirement calls for it.
 
 ## Acceptance criteria
 
@@ -111,12 +112,12 @@ Users must authenticate before accessing the question-answering application. Fir
 - [ ] BM25 and local semantic retrieval are both implemented and evaluated against approximately 20–30 questions with known answers.
 - [ ] Semantic embeddings are generated locally and searched with FAISS; no hosted embedding API or pgvector vector index is required for the initial implementation.
 - [ ] Evaluation results describe which retrieval method performs better for which question types and why.
-- [ ] Fixed-size and semantic/section-aware chunking are each evaluated with both retrieval methods, and an evaluation playground lets users compare the configurations.
+- [ ] Fixed-size and semantic/section-aware chunking are each evaluated with both retrieval methods, and an admin-only evaluation playground lets admins compare the configurations.
 - [ ] Deductible, ER cost sharing, copay, and out-of-pocket maximum values are extracted into a per-plan structured representation with traceable source references, and extraction accuracy is measured against verified values.
 - [ ] The tool can answer supported single-plan and cross-plan questions, including numerical benefit questions.
 - [ ] Every generated answer cites its source plan and SBC section, with page when available.
 - [ ] For low-confidence or unsupported questions, the tool reports insufficient evidence rather than guessing.
-- [ ] Per-query accuracy, latency, and token usage are measured or recorded as applicable to the final synthesis approach.
+- [ ] Per-query accuracy and latency are measured. Token usage is measured only if optional Gemini phrasing is enabled.
 - [ ] Initial answer flow is complete and evaluated without Gemini; any later Gemini integration is a separate phase and cannot weaken evidence, citation, or abstention behavior.
 - [ ] The README explains chunking decisions, BM25 versus semantic retrieval results, extraction accuracy, and what would be done differently with a real budget.
 - [ ] Unauthenticated requests are rejected by the application server; authenticated users can access the question-answering flow.

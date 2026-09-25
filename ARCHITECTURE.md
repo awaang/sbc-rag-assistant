@@ -2,9 +2,11 @@
 
 ## Purpose and status
 
-The demo answers questions about health plan costs and coverage from exactly six verified public Summary of Benefits and Coverage (SBC) PDFs. Its core requirements are correctness, traceable citations, table fidelity, and abstention when evidence is insufficient. The repository is currently at the planning/candidate-document stage; no application or ingestion implementation exists yet.
+The demo answers questions about health plan costs and coverage from exactly six verified public Summary of Benefits and Coverage (SBC) PDFs. Its core requirements are correctness, traceable citations, table fidelity, and abstention when evidence is insufficient. The repository now has a minimal React/Vite frontend and FastAPI API scaffold. Ingestion, persistence, retrieval, and evidence-backed answer generation are not implemented yet.
 
 Six supplied candidate PDFs are stored in `data/source-documents/received/`. Based on titles and inspected contents, they appear to be plan or benefit summaries, including dental and vision summaries, rather than standardized medical SBCs. They do not qualify for the active corpus unless the scope is deliberately changed. No HDHP SBC has been identified yet; this is an open corpus gap, not a blocker to beginning implementation, and an HDHP SBC may be added later. Exact corpus membership remains **TBD**.
+
+Use the supplied candidates for exploratory development wherever useful, including parser inspection, table handling, chunking, extraction, and ingestion workflow work. Label all results as candidate-derived; candidate use does not qualify a file for the verified corpus or final corpus evaluation. Re-run and verify the pipeline against the selected public SBC corpus before final evaluation.
 
 ### Received candidate inventory
 
@@ -68,19 +70,19 @@ Browser -> Firebase sign-in -> ID token -> FastAPI
   -> response with answer/status/citations/diagnostics
 ```
 
-BM25 and FAISS semantic search run independently in evaluation across both chunking strategies. The authenticated evaluation playground lets a user explicitly select a retrieval method and chunking strategy to compare behavior. Detailed rank/score output is admin-only; all users may see selected method/strategy, plan resolution, citations, and answered/abstained status. Ordinary query mode uses the configuration selected from measured results; runtime fusion is not assumed. Numerical comparisons use structured verified records as their source of truth and may use retrieved SBC rows as corroboration. Comparisons must preserve comparable dimensions (e.g. in-network vs out-of-network, individual vs family). If dimensions differ or are unclear, explain the distinction or abstain rather than collapsing values.
+BM25 and FAISS semantic search run independently in evaluation across both chunking strategies. The evaluation playground is admin-only and lets admins explicitly select a retrieval method and chunking strategy to compare behavior and inspect detailed rank/score output. Ordinary users see basic answer diagnostics only; ordinary query mode uses the configuration selected from measured results, and runtime fusion is not assumed. Numerical comparisons use structured verified records as their source of truth and may use retrieved SBC rows as corroboration. Comparisons must preserve comparable dimensions (e.g. in-network vs out-of-network, individual vs family). If dimensions differ or are unclear, explain the distinction or abstain rather than collapsing values.
 
 Every factual answer cites plan and SBC section, adding page when available. The initial implementation has no LLM call. If Gemini is added later, the evidence gate precedes it, citations must resolve to records supplied to the phrasing step, and a post-generation check rejects unsupported claims or returns abstention.
 
 ## Interface and diagnostics
 
-Logical API responses distinguish `answered`, `insufficient_evidence`, and `clarification_needed`, include a concise answer when supported, and carry citations. Concrete routes and wire schema are implementation details to define with the API skeleton.
+Logical API responses distinguish `answered`, `insufficient_evidence`, and `clarification_needed`, include a concise answer when supported, and carry citations. The scaffold exposes `GET /api/health` and protected `POST /api/chat`; chat currently returns a deterministic insufficient-evidence response until a verified corpus and retrieval pipeline exist. The frontend uses Firebase email/password sign-in and sends an ID token as a bearer token. FastAPI verifies the token server-side and fails closed when Firebase credentials are not configured.
 
-All authenticated users see basic diagnostics: resolved plan names, answer/abstention status, cited sources, and a concise indication of the evidence path (structured lookup or retrieval). The evaluation playground exposes selectable BM25/vector and fixed-size/semantic-section-aware configurations. Admins additionally see ranked retrieved chunks, scores, parse/extraction/review status, ingestion errors, embedding/index versions, and evidence-gate details. Never expose credentials, tokens, privileged configuration, or raw internal stack traces.
+All authenticated users see basic diagnostics: resolved plan names, answer/abstention status, cited sources, and a concise indication of the evidence path (structured lookup or retrieval). The admin-only evaluation playground exposes selectable BM25/vector and fixed-size/semantic-section-aware configurations. Admins also see ranked retrieved chunks, scores, parse/extraction/review status, ingestion errors, embedding/index versions, and evidence-gate details. Never expose credentials, tokens, privileged configuration, or raw internal stack traces.
 
 ## Evaluation and open implementation checks
 
-Maintain 20–30 questions with verified answers and supporting source locations. Measure all four BM25/vector × fixed-size/semantic-section-aware combinations independently by question type, plus extraction accuracy against manual verification, answer accuracy, latency, and token usage if an LLM is used. Document actual results and limitations in README; do not invent baselines.
+Maintain 20–30 questions with verified answers and supporting source locations. Measure all four BM25/vector × fixed-size/semantic-section-aware combinations independently by question type, plus extraction accuracy against manual verification, answer accuracy, and latency. Token usage is deferred until optional Gemini phrasing is enabled. Do not retain ordinary user query text by default; evaluation manifest questions are authored test data, and live queries are not added to that manifest. Document actual results and limitations in README; do not invent baselines.
 
 Before relying on the design, verify: the six documents are valid public SBCs with HMO/PPO/HDHP coverage; the deployed API can build/refresh its in-memory FAISS index from approved embedding records in Neon; chosen sentence-transformer model size/startup fits local ingestion; Neon storage fits PDFs plus derived data; Render/Firebase/Neon no-card plans remain available to the account; and upload/admin/local-ingestion-to-review flow works end to end.
 

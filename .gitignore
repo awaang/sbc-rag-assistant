@@ -1,0 +1,23 @@
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+!.env.*.example
+**/.env.local
+**/service-account*.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Frontend
+node_modules/
+dist/
+
+# Local editor and OS files
+.DS_Store
+.idea/
+.vscode/

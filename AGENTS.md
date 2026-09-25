@@ -24,15 +24,18 @@ Build a demo that answers questions about health benefit plans using exactly six
 
 ## Project structure
 
-The repository currently contains project documentation at its root, plus received candidate PDFs under `data/source-documents/received/`:
+The repository contains project documentation and environment configuration at its root, a FastAPI backend, a React/Vite frontend, and received candidate PDFs under `data/source-documents/received/`:
 
 - `AGENTS.md` — coding-agent instructions.
 - `PRD.md` — product requirements and constraints.
 - `PLAN.md` — implementation plan and progress tracking.
 - `ARCHITECTURE.md` — architecture, component responsibilities, flows, and unresolved decisions.
 - `README.md` — project setup and usage; keep it updated as implementation is added.
+- `.env.example` — names of local frontend/backend configuration values; never put secret values here.
+- `backend/` — FastAPI API and Python dependency list.
+- `frontend/` — React + TypeScript + Vite UI, Tailwind styling, and shadcn-style components.
 
-Application, evaluation, and test code directories have not been established yet. Inspect the current tree before assuming a path or creating a new structure. Keep the eventual layout small and clear; update this section if major directories are introduced.
+Evaluation and test code directories have not been established yet. Inspect the current tree before assuming a path or creating a new structure. Keep the layout small and clear; update this section if major directories are introduced.
 
 ## Engineering guidelines
 

@@ -1,6 +1,6 @@
 # Implementation Plan: SBC RAG Demo
 
-This plan records the agreed technology direction and tracks implementation. The repository is still at the planning and candidate-document stage; checked items below indicate prior project state only, not a completed application.
+This plan records the agreed technology direction and tracks implementation. The repository has a minimal frontend and API scaffold; ingestion, retrieval, database persistence, and evidence-backed answering remain pending.
 
 ## Selected stack
 
@@ -16,7 +16,7 @@ This plan records the agreed technology direction and tracks implementation. The
 - **Deployment:** Render Free static site + web service; Neon and Firebase are external managed services. Expect API sleep/cold starts and ephemeral Render filesystems. Store durable state in Neon. Do not require a custom domain or paid persistent disk.
 - **Uploaded source files:** Store modest PDFs as PostgreSQL binary data in Neon for the initial six-plan demo to avoid another account/service and keep uploads durable. Impose a documented upload-size limit below provider/request limits. If corpus size outgrows database storage, revisit object storage only after verifying a no-card option.
 - **Ingestion execution:** Admin upload through the deployed UI is real and durable, but expensive parsing/embedding runs through an admin ingestion CLI on the developer machine. The CLI reads pending PDFs and metadata from Neon, processes them locally, writes parsed/provenance/extraction/embedding records back to Neon, and marks them `needs_review`. Admin approval is required before documents enter normal retrieval. No uploaded file or generated index depends on Render's ephemeral filesystem.
-- **Evaluation/tests:** pytest for backend/parser/retrieval/auth/citation/evidence behavior; frontend checks as appropriate. Store a versioned 20–30 question evaluation manifest with verified expected values and source locations. Record accuracy, latency, retrieval results by method/question type, extraction accuracy, and token usage only if synthesis is enabled.
+- **Evaluation/tests:** pytest for backend/parser/retrieval/auth/citation/evidence behavior; frontend checks as appropriate. Store a versioned 20–30 question evaluation manifest with verified expected values and source locations. Record accuracy, latency, retrieval results by method/question type, and extraction accuracy. Defer token usage measurement until optional Gemini synthesis is enabled.
 - **Secrets:** Environment variables for Neon connection string, Firebase project/service credentials, and deployment configuration. Privileged Firebase credentials exist only in local admin tooling or protected server secrets; never in React or source control.
 
 ## Retrieval and chunking experiment
@@ -24,7 +24,7 @@ This plan records the agreed technology direction and tracks implementation. The
 - The two retrieval methods are **BM25 keyword retrieval** (`rank-bm25`) and **semantic vector retrieval** (local sentence-transformer embeddings searched with local FAISS). These methods differ in how they find relevant chunks; neither replaces the other in the baseline evaluation.
 - The two chunking strategies are **fixed-size chunking** and **semantic/section-aware chunking**. Both must preserve table rows and the headers/context needed to interpret them.
 - Evaluate the four combinations (BM25 + fixed-size, BM25 + semantic/section-aware, vector + fixed-size, vector + semantic/section-aware) against the same labeled questions and report retrieval/answer results by question type.
-- Add an authenticated **evaluation playground** that lets a user select a retrieval method and chunking strategy, then submit a question and inspect answer status, citations, and basic diagnostics. Advanced chunk/retrieval scores and run details are admin-only. This is an evaluation control, not an unreviewed production routing knob: ordinary user mode uses the measured default configuration; admin/evaluation mode can compare configurations.
+- Add an **admin-only evaluation playground** that lets an admin select a retrieval method and chunking strategy, then submit a question and inspect answer status, citations, and diagnostics. This is an evaluation control, not an unreviewed production routing knob: ordinary user mode uses the measured default configuration; admins can compare configurations and inspect detailed scores/run traces.
 - Store versioned chunks for both strategies and associate each retrieval run with its chunking strategy, retrieval method, model/version, and top-k/configuration so results are reproducible. Do not duplicate original PDFs or verified benefit records for each strategy.
 - Numerical questions continue to use verified structured benefit records for their value source; selected retrieval/chunking settings affect source-evidence retrieval and diagnostics, not the authority for numeric values.
 
@@ -33,6 +33,7 @@ This plan records the agreed technology direction and tracks implementation. The
 ### Phase 1 — Corpus and runnable project skeleton
 
 - **Completed project setup:** Six candidate PDFs have been received and provisionally classified in `ARCHITECTURE.md`; they remain separate from the qualifying corpus.
+- **Scaffold added:** React + TypeScript + Vite frontend with shadcn-style UI primitives, Firebase email/password sign-in, a chat form with collapsible diagnostics, and a FastAPI health/chat API. The protected chat endpoint currently abstains because there is no verified corpus or retrieval pipeline yet.
 - [ ] Establish a small Python backend/ingestion/evaluation/test layout and React TypeScript frontend.
 - [ ] Add dependency/configuration files, local development instructions, `.env.example` containing names only, and ignores for secrets/build outputs.
 - [ ] Add Firebase sign-in and FastAPI ID-token verification, Neon schema/migrations for relational records (including ordinary embedding values, with no pgvector), FastAPI health/API skeleton, and Render deployment configuration without embedding secrets. Protect each authenticated/admin route when it is introduced; do not defer route security to a later phase.
@@ -43,7 +44,7 @@ This plan records the agreed technology direction and tracks implementation. The
 ### Corpus prerequisite — select the verified six-document set
 
 - [ ] Select exactly six verified public SBC PDFs; record source URLs, insurer, plan identity/type/year, and confirm the desired HMO, PPO, and HDHP mix where feasible. Current candidates appear not to qualify and contain no identified HDHP SBC.
-- [ ] Keep this corpus requirement visible, but allow skeleton and pipeline implementation to proceed with clearly labeled fixtures/candidates. Complete corpus selection before final corpus ingestion and end-to-end evaluation.
+- [ ] Keep this corpus requirement visible, and make practical use of the supplied candidates for exploratory parsing, table handling, chunking, extraction, and pipeline development with clear candidate labels. Candidate work does not qualify files for the active corpus or final corpus evaluation. Complete corpus selection before final corpus ingestion and end-to-end evaluation.
 
 **Milestone:** Six eligible, public SBCs are documented as the active corpus. This is required for final acceptance and representative evaluation, but does not block the project skeleton.
 
@@ -53,7 +54,7 @@ This plan records the agreed technology direction and tracks implementation. The
 - [ ] Implement the local ingestion CLI: fetch pending uploads, parse pages/tables, preserve section/page and table headers, and report parse issues.
 - [ ] Keep documents and extracted records in pending/review states until an admin approves them; ensure upload alone never makes a document queryable.
 - [ ] Compare fixed-size chunking with semantic/section-aware chunking while never splitting a table row from its interpretive headers/context.
-- [ ] Review parser output on available candidates/fixtures during pipeline development and on all six verified SBCs once selected; add Camelot only where it improves real table fidelity. Candidate parsing is exploratory and does not qualify a candidate for the corpus.
+- [ ] Review parser output on the supplied candidates and fixtures during pipeline development, then on all six verified SBCs once selected; add Camelot only where it improves real table fidelity. Candidate parsing is exploratory and does not qualify a candidate for the corpus.
 - [ ] Add parser/chunker fixtures covering provenance, intact rows, missing sections, and malformed/unreadable pages.
 
 **Milestone:** Available PDFs produce inspectable pages, table rows, and chunks with traceable provenance. Repeat/complete this review for the six verified SBCs after corpus selection.
@@ -73,7 +74,7 @@ This plan records the agreed technology direction and tracks implementation. The
 - [ ] Add plan/document/section filtering without losing provenance.
 - [ ] Create 20–30 evaluation questions with verified expected evidence locations, answer labels, and question types from the selected corpus.
 - [ ] Measure the four retrieval/chunking combinations independently (e.g. supporting evidence in top-k) on identical evaluation questions and compare by question type.
-- [ ] Add an authenticated evaluation playground for selecting BM25 or semantic search and fixed-size or semantic/section-aware chunks; show basic answer/citation diagnostics and restrict detailed result traces to admins.
+- [ ] Add an admin-only evaluation playground for selecting BM25 or semantic search and fixed-size or semantic/section-aware chunks; show answer/citation diagnostics and detailed result traces to admins.
 - [ ] Record latency and retrieval scores; select runtime retrieval behavior from measured results, retaining both methods for comparison.
 
 **Milestone:** Reproducible retrieval results explain where BM25 and semantic search help or fail.
@@ -95,7 +96,7 @@ This plan records the agreed technology direction and tracks implementation. The
 
 - [ ] Deploy React static site and FastAPI web service on Render Free; configure Firebase authorized domains and server secrets; connect Neon Free.
 - [ ] Ensure the review UI communicates backend cold start and retries safely; verify upload-to-local-ingestion-to-review-to-answer lifecycle.
-- [ ] Run the labeled set against the selected verified corpus; report answer/extraction accuracy, per-method retrieval results by question type, latency, and token usage if applicable.
+- [ ] Run the labeled set against the selected verified corpus; report answer/extraction accuracy, per-method retrieval results by question type, and latency. Defer token usage reporting until optional Gemini phrasing is enabled.
 - [ ] Document actual chunking/parser/vector choices and observed limits, free-tier behavior, results, and what additional budget would change.
 
 **Milestone:** The deployed demo is reproducible within no-card free-tier constraints and reports measured evidence quality.
