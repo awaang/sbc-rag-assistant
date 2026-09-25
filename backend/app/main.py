@@ -65,6 +65,8 @@ def require_user(authorization: Annotated[str | None, Header()] = None) -> dict:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sign in to continue.")
     token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sign in to continue.")
     try:
         return auth.verify_id_token(token, check_revoked=True)
     except Exception as exc:  # Firebase SDK raises several token-specific exception types.
