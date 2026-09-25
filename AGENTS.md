@@ -33,7 +33,9 @@ The repository contains project documentation and environment configuration at i
 - `README.md` — project setup and usage; keep it updated as implementation is added.
 - `.env.example` — names of local frontend/backend configuration values; never put secret values here.
 - `backend/` — FastAPI API and Python dependency list.
+- `backend/migrations/` — ordered PostgreSQL schema migrations; embeddings are ordinary array values, not pgvector.
 - `frontend/` — React + TypeScript + Vite UI, Tailwind styling, and shadcn-style components.
+- `render.yaml` — Render Blueprint for the static frontend and API service; account-specific secrets stay in Render's environment settings.
 
 Evaluation and test code directories have not been established yet. Inspect the current tree before assuming a path or creating a new structure. Keep the layout small and clear; update this section if major directories are introduced.
 

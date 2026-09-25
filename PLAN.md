@@ -1,6 +1,6 @@
 # Implementation Plan: SBC RAG Demo
 
-This plan records the agreed technology direction and tracks implementation. The repository has a minimal frontend and API scaffold; ingestion, retrieval, database persistence, and evidence-backed answering remain pending.
+This plan records the agreed technology direction and tracks implementation. Phase 1's local frontend/API scaffold, Firebase auth foundation, initial Neon schema migration, and Render Blueprint are implemented. Ingestion, runtime database access, retrieval, and evidence-backed answering remain pending.
 
 ## Selected stack
 
@@ -33,13 +33,13 @@ This plan records the agreed technology direction and tracks implementation. The
 ### Phase 1 — Corpus and runnable project skeleton
 
 - **Completed project setup:** Six candidate PDFs have been received and provisionally classified in `ARCHITECTURE.md`; they remain separate from the qualifying corpus.
-- **Scaffold added:** React + TypeScript + Vite frontend with shadcn-style UI primitives, Firebase email/password sign-in, a chat form with collapsible diagnostics, and a FastAPI health/chat API. The protected chat endpoint currently abstains because there is no verified corpus or retrieval pipeline yet.
-- [ ] Establish a small Python backend/ingestion/evaluation/test layout and React TypeScript frontend.
-- [ ] Add dependency/configuration files, local development instructions, `.env.example` containing names only, and ignores for secrets/build outputs.
-- [ ] Add Firebase sign-in and FastAPI ID-token verification, Neon schema/migrations for relational records (including ordinary embedding values, with no pgvector), FastAPI health/API skeleton, and Render deployment configuration without embedding secrets. Protect each authenticated/admin route when it is introduced; do not defer route security to a later phase.
-- [ ] Document how to run locally and deploy the free demo, including cold-start and quota limitations.
+- **Scaffold added:** React + TypeScript + Vite frontend with shadcn-style UI primitives, Firebase email/password registration/sign-in, a chat form with collapsible diagnostics, and a FastAPI health/chat API. The protected chat endpoint currently abstains because there is no verified corpus or retrieval pipeline yet.
+- [x] Establish a small Python backend and React TypeScript frontend layout; ingestion/evaluation/test directories will be added with those phases.
+- [x] Add dependency/configuration files, local development instructions, `.env.example` containing names only, and ignores for secrets/build outputs.
+- [x] Add Firebase registration/sign-in and FastAPI ID-token verification; Neon relational schema/migration with ordinary embedding values and no pgvector; FastAPI health/API skeleton; local admin-claim bootstrap command; and Render Blueprint without embedded secrets. Protect each authenticated/admin route when it is introduced.
+- [x] Document local run and Render deployment setup, including manual provider configuration, cold starts, and free-tier limits.
 
-**Milestone:** A clean checkout can run locally and the app skeleton can be deployed using no-card free tiers.
+**Milestone:** Phase 1 implementation is complete. Local commands and deployment configuration are documented. A real deployment still requires Firebase/Neon/Render accounts, credentials, and the manual environment settings in README; external resources have not been provisioned from this repo.
 
 ### Corpus prerequisite — select the verified six-document set
 

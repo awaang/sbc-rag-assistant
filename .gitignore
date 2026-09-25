@@ -12,6 +12,7 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+.coverage
 
 # Frontend
 node_modules/

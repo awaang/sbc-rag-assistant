@@ -38,11 +38,12 @@ Storage capacity has not been estimated because the qualifying SBC files, their 
 - Python 3.11 or newer.
 - A Firebase project with Email/Password sign-in and account creation enabled, plus a registered web app.
 - A Firebase service account for the API, stored outside this repository.
+- A Neon Postgres database for applying the initial schema migration.
 
 ### Configure Firebase
 
 1. Copy the root `.env.example` values into `frontend/.env.local` and fill in the Firebase web app values. Set `VITE_API_BASE_URL=http://localhost:8000`.
-2. Copy the backend values from `.env.example` into a repository-root `.env`. Set `FIREBASE_PROJECT_ID` and `GOOGLE_APPLICATION_CREDENTIALS` to the Firebase project ID and path to the service-account JSON file. Keep that JSON file outside the repository.
+2. Copy the backend values from `.env.example` into a repository-root `.env`. Set `FIREBASE_PROJECT_ID`, `DATABASE_URL`, and `GOOGLE_APPLICATION_CREDENTIALS` to the Firebase project ID, Neon connection string (with SSL enabled), and path to the Firebase service-account JSON file. Keep that JSON file outside the repository.
 3. In Firebase Console, enable the Email/Password provider. Users can register from the app; add `localhost` to Authorized domains if it is not already listed.
 4. Set `FRONTEND_ORIGIN=http://localhost:5173` in the root `.env`.
 
@@ -58,6 +59,23 @@ uvicorn app.main:app --reload
 
 The API health check is at `http://localhost:8000/api/health`; interactive API docs are at `http://localhost:8000/docs`.
 
+To create the relational schema in Neon, run this after setting `DATABASE_URL`:
+
+```bash
+python -m app.db.migrate
+```
+
+The initial migration creates the plan, document, parsed-page, chunk, benefit-record, and ordinary embedding-value tables. Embeddings use PostgreSQL `DOUBLE PRECISION[]`; the migration does not install or use pgvector. This schema is a foundation for later ingestion and retrieval work; the API does not use the database yet.
+
+To grant or revoke an admin claim for an existing Firebase account, use the local CLI with the service-account credentials configured above:
+
+```bash
+python -m app.admin_claims grant user@example.com
+python -m app.admin_claims revoke user@example.com
+```
+
+Only run this trusted local command for designated admins. Users must refresh their Firebase ID token after a claim change.
+
 ### Run the frontend
 
 In another terminal:
@@ -68,9 +86,15 @@ npm install
 npm run dev
 ```
 
-Open the URL Vite prints (normally `http://localhost:5173`) and sign in with the Firebase demo user. The chat endpoint currently returns an explicit insufficient-evidence response because no verified corpus, ingestion pipeline, or retrieval implementation is connected yet. The Debug details section shows response status, citations, and evidence-path information.
+Open the URL Vite prints (normally `http://localhost:5173`) and register an account or sign in with an existing Firebase user. The chat endpoint currently returns an explicit insufficient-evidence response because no verified corpus, ingestion pipeline, or retrieval implementation is connected yet. The Debug details section shows response status, citations, and evidence-path information.
 
-For a production frontend bundle, run `npm run build` from `frontend/`. The current API scaffold is local-development oriented; deployment configuration and database integration remain future work.
+For a production frontend bundle, run `npm run build` from `frontend/`.
+
+### Deploy the Phase 1 scaffold to Render
+
+The root [`render.yaml`](render.yaml) defines the free API web service and static frontend. Connect the repository as a Render Blueprint and provide the prompted Firebase, Neon, and frontend environment values. The API and frontend public URLs are not known until Render creates the services; use temporary values for `FRONTEND_ORIGIN` and `VITE_API_BASE_URL` during initial creation, then replace them with the actual service URLs below. Upload the Firebase service-account JSON in the API service's **Secret Files** as `firebase-service-account.json`; the Blueprint points `GOOGLE_APPLICATION_CREDENTIALS` to `/etc/secrets/firebase-service-account.json`. Do not put this file or its contents in the repository.
+
+After Render creates both services, set `VITE_API_BASE_URL` on the static site to the API service's public `https://…onrender.com` URL and redeploy the static site. Set `FRONTEND_ORIGIN` on the API service to the static site's public URL and redeploy the API. The frontend values are embedded at build time, so changing them requires a new static-site build. The API service may sleep when idle and have a delayed first response. Neon remains an external service; the Blueprint does not provision it. Confirm the current free-tier, account-verification, and no-card terms in your Render, Neon, and Firebase accounts before deployment.
 
 ## Planned capabilities
 
