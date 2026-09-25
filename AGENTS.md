@@ -4,7 +4,7 @@ These repository files record current requirements and selected technology decis
 
 ## Project purpose
 
-Build a demo that answers questions about health benefit plans using exactly six publicly available Summary of Benefits and Coverage (SBC) PDFs. Answer correctness, traceable citations, and abstaining when evidence is insufficient are core requirements. Authentication is in scope.
+Build a demo that answers questions about health benefit plans using the six PDFs currently received as a provisional development corpus. Their SBC status and public availability remain unverified; do not describe them as verified SBCs. Answer correctness, traceable citations, and abstaining when evidence is insufficient are core requirements. Authentication is in scope.
 
 ## Read before making changes
 
@@ -18,7 +18,7 @@ Build a demo that answers questions about health benefit plans using exactly six
 
 - Treat `PRD.md` as the canonical, durable statement of the project brief. Before adding or changing behavior, check it and `ARCHITECTURE.md`/`PLAN.md` for alignment.
 - Do not silently omit or replace a project-brief requirement. If a requirement is ambiguous, conflicts with the current design, or appears infeasible, explain the discrepancy to the user and mark it **TBD** in the relevant planning document until resolved.
-- Keep the core constraints visible in implementation: exactly six verified public SBCs; aim for HMO/PPO/HDHP coverage while treating the currently missing HDHP SBC as an open corpus gap, not a prerequisite to start; table-preserving parsing/chunking with provenance; BM25 and local sentence-transformer embeddings searched with FAISS; structured benefit extraction; deterministic answer formatting in the initial implementation; Gemini is explicitly deferred to a later phase and must remain an evidence-bound phrasing addition; citations and abstention; Firebase authentication with server-enforced admin roles; real admin upload/review with local ingestion; and 20–30-question evaluation.
+- Keep the core constraints visible in implementation: use the six received PDFs as a provisional development corpus while preserving their unverified status; the set includes dental and vision summaries and does not establish HMO/PPO/HDHP SBC coverage; table-preserving parsing/chunking with provenance; BM25 and local sentence-transformer embeddings searched with FAISS; structured benefit extraction; deterministic answer formatting in the initial implementation; Gemini is explicitly deferred to a later phase and must remain an evidence-bound phrasing addition; citations and abstention; Firebase authentication with server-enforced admin roles; real admin upload/review with local ingestion; and 20–30-question evaluation. Treat performance and evaluation as provisional and corpus-scoped; final SBC/public-source qualification remains TBD.
 - Keep the roles distinct: sentence-transformers generates embeddings locally, FAISS performs local vector search, and Neon Postgres stores durable relational application data. Do not duplicate vectors in pgvector unless a later requirement justifies changing the selected vector index.
 - Do not substitute hosted embeddings or managed file-search RAG. An LLM is optional and must remain a thin final phrasing step; it may never provide unsupported benefit facts.
 - Keep live chat transcripts in frontend memory for the active page session only; clear them on new chat, sign-out, reload, or page close. Do not persist ordinary user messages to Neon, browser storage, or the evaluation manifest.
@@ -39,7 +39,7 @@ The repository contains project documentation and environment configuration at i
 - `render.yaml` — Render Blueprint for the static frontend and API service; account-specific secrets stay in Render's environment settings.
 - `data/source-documents/received/metadata.json` — provisional metadata for received candidate PDFs; null values are unknown and records do not establish SBC eligibility.
 
-Evaluation and test code directories have not been established yet. Inspect the current tree before assuming a path or creating a new structure. Keep the layout small and clear; update this section if major directories are introduced.
+Evaluation artifacts have not been established yet. Backend tests currently live in `backend/tests/` and use the pytest configuration in `backend/pytest.ini`. Inspect the current tree before assuming other paths or creating new structures. Keep the layout small and clear; update this section if major directories are introduced.
 
 ## Engineering guidelines
 

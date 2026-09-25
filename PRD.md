@@ -18,9 +18,9 @@ Users must authenticate before accessing the question-answering application. Fir
 
 ## Goals
 
-- Ingest exactly 6 publicly available SBC PDFs, aiming for a mix of HMO, PPO, and HDHP plans, sourced from insurer sites such as Kaiser, Aetna, and Guardian. No HDHP SBC has been identified so far; implementation may proceed, and adding an HDHP SBC remains an open corpus decision.
-- Maintain a distinction between received candidate documents and the verified six-document SBC ingestion corpus; only documents confirmed as SBCs may count toward the corpus requirement. The six currently received PDFs have been inspected and appear to be plan/benefit summaries (including dental and vision summaries), not the standardized SBC form; they do not yet satisfy this requirement.
-- Make practical use of the six supplied candidate PDFs for exploratory parsing, table handling, chunking, extraction, and pipeline development while clearly labeling them as unverified candidates. Their use for development does not make them eligible for the verified corpus or final corpus evaluation.
+- Use the six PDFs currently supplied in `data/source-documents/received/` as the provisional development corpus for ingestion, retrieval, answer-flow, and evaluation work. They remain unverified documents; do not represent them as verified SBCs or public-source documents.
+- Preserve each supplied file's actual document type and coverage type. The current set includes medical plan/benefit summaries and dental and vision summaries, so results are provisional and apply only to this mixed set.
+- Final qualification as exactly six publicly available standardized medical SBCs, including HMO/PPO/HDHP coverage, is **TBD**. The current six do not satisfy that acceptance criterion unless individually verified or replaced. This does not block development or provisional evaluation on the supplied set.
 - Answer questions about plan benefits and costs, including single-plan lookups and comparisons across plans.
 - Ground answers in the source documents and cite the source plan and section for every answer.
 - Avoid guessing: report low confidence or insufficient source support instead of returning an unsupported answer.
@@ -40,7 +40,7 @@ Users must authenticate before accessing the question-answering application. Fir
 ## Non-goals
 
 - Providing medical advice or recommendations about which plan a person should choose.
-- Covering all insurers, plans, or SBC documents; the initial corpus is limited to the selected 6 public PDFs.
+- Covering all insurers, plans, or benefit documents; provisional development is limited to the six received PDFs, with final public-SBC corpus qualification still TBD.
 - Treating semantic retrieval alone as the source of truth for numerical benefits.
 - Building a production-grade health benefits service. Production deployment, compliance requirements, and service-level commitments are **TBD**.
 - A polished user interface is not required for the core demo; a simple question-and-answer interface is sufficient.
@@ -48,9 +48,9 @@ Users must authenticate before accessing the question-answering application. Fir
 ## Functional requirements
 
 1. **Document corpus and ingestion**
-   - Use exactly 6 verified SBC PDFs, including a mix of HMO, PPO, and HDHP plans.
-   - Track received candidate files separately until their document type, plan identity, and SBC status are verified. Filenames alone do not establish corpus eligibility. A missing source URL does not prevent processing a supplied PDF, but public availability must be documented before it counts toward the public-SBC acceptance criterion.
-   - Parse SBC content with attention to table structure; evaluate PDF parsing approaches such as pdfplumber or Camelot.
+   - Use the six supplied PDFs as the current provisional development corpus and track their document identity, type, coverage type, and provenance accurately.
+   - Keep SBC status and public availability explicitly unverified unless confirmed from document evidence and an authoritative public source. Filenames alone do not establish eligibility. Final acceptance as exactly six public medical SBC PDFs spanning HMO, PPO, and HDHP remains **TBD**.
+   - Parse the provisional source documents with attention to table structure; evaluate PDF parsing approaches such as pdfplumber or Camelot.
    - Preserve benefit rows and their context during chunking; a table row must not be split across chunks.
    - Explore fixed-size and semantic chunking and document the selected strategy and its tradeoffs.
 
@@ -62,7 +62,7 @@ Users must authenticate before accessing the question-answering application. Fir
   - BM25 and semantic retrieval must be independently measurable. Which method the demo uses at runtime, and whether retrieval fusion is needed, are **TBD** until evaluation results are available.
 
 3. **Structured benefit extraction**
-   - Extract key numerical benefit details from SBCs into a clean schema organized by plan. The initial fields are deductible, emergency room cost sharing, copays, and out-of-pocket maximum; additional coverage is **TBD**.
+   - Extract key numerical benefit details from the provisional source documents into a clean schema organized by plan. The initial fields are deductible, emergency room cost sharing, copays, and out-of-pocket maximum; additional coverage is **TBD**.
    - Store each extracted value with its plan identity and source document, page, and section when available.
    - Use structured extracted data for numerical questions such as deductibles, copays, and out-of-pocket maximums, rather than relying on semantic retrieval alone.
    - Record extraction accuracy against verified values in the evaluation set.
@@ -108,8 +108,9 @@ Users must authenticate before accessing the question-answering application. Fir
 
 ## Acceptance criteria
 
-- [ ] The corpus contains exactly 6 publicly available SBC PDFs and includes HMO, PPO, and HDHP plans.
-- [ ] SBCs are parsed with table structure considered, and chunks do not split table rows.
+- [ ] The provisional workflow uses the six received PDFs without misrepresenting their SBC status, public availability, or medical/dental/vision coverage types.
+- [ ] Final corpus qualification is resolved: exactly six publicly available standardized medical SBC PDFs, including HMO, PPO, and HDHP plans, or a documented approved change to that target.
+- [ ] Provisional source documents are parsed with table structure considered, and chunks do not split table rows.
 - [ ] BM25 and local semantic retrieval are both implemented and evaluated against approximately 20–30 questions with known answers.
 - [ ] Semantic embeddings are generated locally and searched with FAISS; no hosted embedding API or pgvector vector index is required for the initial implementation.
 - [ ] Evaluation results describe which retrieval method performs better for which question types and why.

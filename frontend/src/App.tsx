@@ -26,11 +26,13 @@ type ChatTurn = {
   error?: string;
 };
 
-type Page = "plans" | "chat" | "playground" | "evaluation" | "profile";
+type Page = "plans" | "chat" | "documents" | "benefits" | "playground" | "evaluation" | "profile";
 
 const pageLabels: Record<Page, string> = {
   plans: "Plans",
   chat: "Chat",
+  documents: "Documents",
+  benefits: "Benefits review",
   playground: "Playground",
   evaluation: "Evaluation",
   profile: "Profile",
@@ -164,7 +166,7 @@ export default function App() {
   }
 
   const visiblePages: Page[] = isAdmin
-    ? ["plans", "chat", "playground", "evaluation", "profile"]
+    ? ["plans", "chat", "documents", "benefits", "playground", "evaluation", "profile"]
     : ["plans", "chat", "profile"];
   const page = visiblePages.includes(activePage) ? activePage : "chat";
 
@@ -189,6 +191,8 @@ export default function App() {
       <section className={`app-content ${page === "chat" ? "chat-content" : ""}`}>
         {page === "chat" && <ChatPage question={question} setQuestion={setQuestion} handleSubmit={handleSubmit} loading={loading} turns={chatTurns} setTurns={setChatTurns} isAdmin={isAdmin} />}
         {page === "plans" && <PlansPage isAdmin={isAdmin} />}
+        {page === "documents" && isAdmin && <DocumentsPage user={user} />}
+        {page === "benefits" && isAdmin && <BenefitsReviewPage user={user} />}
         {page === "playground" && isAdmin && <PlaceholderPage page="playground" />}
         {page === "evaluation" && isAdmin && <PlaceholderPage page="evaluation" />}
         {page === "profile" && <ProfilePage user={user} isAdmin={isAdmin} />}
@@ -196,6 +200,142 @@ export default function App() {
       <footer className="site-footer"><span>SBC ASSISTANT</span><span>For plan information only · Not medical advice</span></footer>
     </main>
   );
+}
+
+type BenefitRow = {
+  benefit_id: number; plan_name: string; original_filename: string;
+  corpus_status: string; category: string; value_text: string | null;
+  dimensions: Record<string, string>; page_number: number | null;
+  source_section: string | null; verification_status: string;
+};
+type ManagedDocument = {
+  document_id: number; original_filename: string; source_url: string | null;
+  corpus_status: string; review_status: string; ingestion_error: string | null;
+  plan_name: string | null; insurer: string | null; plan_type: string;
+  coverage_type: string; plan_year: number | null; parsed_pages: number;
+};
+type SourceDocument = { document_id: number; original_filename: string; plan_name: string | null; parsed_pages: number; corpus_status: string };
+
+function BenefitsReviewPage({ user }: { user: User }) {
+  const [rows, setRows] = useState<BenefitRow[]>([]);
+  const [documents, setDocuments] = useState<SourceDocument[]>([]);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function api(path: string, init?: RequestInit) {
+    const token = await user.getIdToken();
+    const response = await fetch(`${API_BASE}${path}`, { ...init, headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...init?.headers } });
+    if (!response.ok) { const body = await response.json().catch(() => null); throw new Error(body?.detail || `Request failed (${response.status})`); }
+    return response.json();
+  }
+  async function refresh() {
+    setError("");
+    try {
+      const [benefits, docs] = await Promise.all([api("/api/admin/benefits?status_filter=all"), api("/api/admin/documents")]);
+      setRows(benefits); setDocuments(docs);
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not load review data."); }
+  }
+  useEffect(() => { void refresh(); }, [user.uid]);
+  async function extract(documentId: number) {
+    setBusy(true); setMessage(""); setError("");
+    try { const result = await api("/api/admin/benefits/extract", { method: "POST", body: JSON.stringify({ document_id: documentId }) }); setMessage(`Created ${result.candidates_created} candidate records. Every value requires review.`); await refresh(); }
+    catch (e) { setError(e instanceof Error ? e.message : "Extraction failed."); }
+    finally { setBusy(false); }
+  }
+  async function save(row: BenefitRow, form: HTMLFormElement) {
+    const values = new FormData(form);
+    let dimensions: Record<string, string>;
+    try {
+      const parsed = JSON.parse(String(values.get("dimensions") || "{}"));
+      if (!parsed || Array.isArray(parsed) || typeof parsed !== "object" || Object.values(parsed).some((value) => typeof value !== "string")) throw new Error();
+      dimensions = parsed as Record<string, string>;
+    } catch {
+      setError("Dimensions must be a JSON object with string values.");
+      return;
+    }
+    setBusy(true); setError("");
+    try {
+      await api(`/api/admin/benefits/${row.benefit_id}`, { method: "PATCH", body: JSON.stringify({ value_text: values.get("value_text") || null, verification_status: values.get("verification_status"), dimensions }) });
+      setMessage("Review saved."); await refresh();
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not save review."); }
+    finally { setBusy(false); }
+  }
+  return <div className="content-page">
+    <PageHeading eyebrow="ADMIN WORKSPACE" title="Benefit extraction review" description="Extract candidate values from parsed pages, then verify each value against its source. Candidate-derived records do not qualify a document as an SBC." />
+    {error && <p role="alert" className="chat-error">{error}</p>}{message && <p role="status">{message}</p>}
+    <Card><CardContent className="p-5"><h2 className="font-semibold">Parsed documents</h2><p className="text-sm text-muted-foreground">Extraction requires Phase 2 parsed pages and a linked plan.</p>
+      {documents.map((doc) => <div className="flex flex-wrap items-center justify-between gap-3 border-b py-3" key={doc.document_id}><span>{doc.plan_name || doc.original_filename} · {doc.parsed_pages} pages · {doc.corpus_status}</span><Button disabled={busy || !doc.parsed_pages} onClick={() => void extract(doc.document_id)}>Extract candidates</Button></div>)}
+      {!documents.length && <p className="py-3 text-sm text-muted-foreground">No documents are available. Complete document ingestion first.</p>}
+    </CardContent></Card>
+    <div className="mt-5 space-y-3">{rows.map((row) => <Card key={row.benefit_id}><CardContent className="p-5"><div className="mb-3 flex flex-wrap justify-between gap-2"><strong>{row.plan_name} · {row.category.replace(/_/g, " ")}</strong><span className="text-xs text-muted-foreground">{row.original_filename} · {row.source_section || "Section unavailable"}{row.page_number ? ` · page ${row.page_number}` : ""} · {row.corpus_status}</span></div><form onSubmit={(event) => { event.preventDefault(); void save(row, event.currentTarget); }} className="grid gap-3 lg:grid-cols-[1fr_1fr_180px_auto]"><label className="field-label">Source wording / corrected value<textarea className="text-input min-h-20" name="value_text" defaultValue={row.value_text || ""} /></label><label className="field-label">Dimensions (JSON)<textarea className="text-input min-h-20 font-mono text-xs" name="dimensions" defaultValue={JSON.stringify(row.dimensions || {}, null, 2)} /></label><label className="field-label">Review status<select className="text-input" name="verification_status" defaultValue={row.verification_status}><option value="pending_review">Pending review</option><option value="verified">Verified</option><option value="missing">Missing</option><option value="ambiguous">Ambiguous</option><option value="conflicting">Conflicting</option></select></label><div className="self-end"><Button type="submit" disabled={busy}>Save review</Button></div></form></CardContent></Card>)}</div>
+  </div>;
+}
+
+function DocumentsPage({ user }: { user: User }) {
+  const [documents, setDocuments] = useState<ManagedDocument[]>([]);
+  const [inspection, setInspection] = useState<any>(null);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function api(path: string, init?: RequestInit) {
+    const token = await user.getIdToken();
+    const headers = new Headers(init?.headers);
+    headers.set("Authorization", `Bearer ${token}`);
+    if (init?.body && !(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
+    const response = await fetch(`${API_BASE}${path}`, { ...init, headers });
+    if (!response.ok) { const body = await response.json().catch(() => null); throw new Error(body?.detail || `Request failed (${response.status})`); }
+    return response.json();
+  }
+  async function refresh() {
+    try { setDocuments(await api("/api/admin/documents")); }
+    catch (e) { setError(e instanceof Error ? e.message : "Could not load documents."); }
+  }
+  useEffect(() => { void refresh(); }, [user.uid]);
+  async function upload(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); const formElement = event.currentTarget; setBusy(true); setError(""); setNotice("");
+    try { const form = new FormData(formElement); if (!form.get("plan_year")) form.delete("plan_year"); await api("/api/admin/documents", { method: "POST", body: form }); formElement.reset(); setNotice("PDF uploaded to durable storage as an unverified candidate. Run the local ingestion command to parse it."); await refresh(); }
+    catch (e) { setError(e instanceof Error ? e.message : "Upload failed."); }
+    finally { setBusy(false); }
+  }
+  async function inspect(documentId: number) {
+    setError("");
+    try { setInspection(await api(`/api/admin/documents/${documentId}`)); }
+    catch (e) { setError(e instanceof Error ? e.message : "Could not inspect document."); }
+  }
+  async function review(documentId: number, review_status: "approved" | "rejected") {
+    setBusy(true); setError(""); setNotice("");
+    try { await api(`/api/admin/documents/${documentId}/review`, { method: "PATCH", body: JSON.stringify({ review_status }) }); setNotice(`Document ${review_status}. Corpus eligibility remains ${documents.find((item) => item.document_id === documentId)?.corpus_status || "candidate"}.`); await refresh(); await inspect(documentId); }
+    catch (e) { setError(e instanceof Error ? e.message : "Could not save document review."); }
+    finally { setBusy(false); }
+  }
+  async function retry(documentId: number) {
+    setBusy(true); setError(""); setNotice("");
+    try { await api(`/api/admin/documents/${documentId}/retry`, { method: "POST" }); setNotice("Document returned to the upload queue. Run the local ingestion command again."); await refresh(); }
+    catch (e) { setError(e instanceof Error ? e.message : "Could not queue document."); }
+    finally { setBusy(false); }
+  }
+  return <div className="content-page">
+    <PageHeading eyebrow="ADMIN WORKSPACE" title="Source documents" description="Upload PDFs, run local ingestion, inspect parsed pages and chunks, then record document review. Review approval does not establish SBC eligibility." />
+    {error && <p role="alert" className="chat-error">{error}</p>}{notice && <p role="status">{notice}</p>}
+    <Card><CardContent className="p-5"><h2 className="font-semibold">Upload a plan PDF</h2><p className="mb-4 text-sm text-muted-foreground">Uploads are stored in Neon. Parsing runs locally with <code>python -m app.ingest</code>. Maximum file size: 15 MB.</p>
+      <form onSubmit={upload} className="grid gap-3 sm:grid-cols-2">
+        <label className="field-label">PDF file<input className="text-input" type="file" name="file" accept="application/pdf,.pdf" required /></label>
+        <label className="field-label">Insurer<input className="text-input" name="insurer" maxLength={120} required /></label>
+        <label className="field-label">Plan name<input className="text-input" name="plan_name" maxLength={240} required /></label>
+        <label className="field-label">Plan type<select className="text-input" name="plan_type"><option value="unknown">Unknown</option><option value="hmo">HMO</option><option value="ppo">PPO</option><option value="hdhp">HDHP</option><option value="pos">POS</option><option value="other">Other</option></select></label>
+        <label className="field-label">Coverage type<select className="text-input" name="coverage_type"><option value="medical">Medical</option><option value="dental">Dental</option><option value="vision">Vision</option><option value="unknown">Unknown</option></select></label>
+        <label className="field-label">Plan year<input className="text-input" name="plan_year" type="number" min="1900" max="2200" /></label>
+        <label className="field-label sm:col-span-2">Public source URL (optional for candidate processing)<input className="text-input" name="source_url" type="url" maxLength={2000} /></label>
+        <div><Button type="submit" disabled={busy}>{busy ? "Uploading…" : "Upload candidate PDF"}</Button></div>
+      </form>
+    </CardContent></Card>
+    <Card className="mt-5"><CardContent className="p-5"><h2 className="font-semibold">Ingestion and review queue</h2><p className="mb-3 text-sm text-muted-foreground">After upload, run the CLI above on a machine with database access. Successful parses move to needs review.</p>
+      {documents.map((doc) => <div className="border-b py-4" key={doc.document_id}><div className="flex flex-wrap items-start justify-between gap-3"><div><strong>{doc.plan_name || doc.original_filename}</strong><p className="text-sm text-muted-foreground">{doc.insurer} · {doc.plan_type?.toUpperCase()} · {doc.coverage_type} {doc.plan_year || ""} · {doc.parsed_pages} pages · {doc.review_status} · {doc.corpus_status}</p>{doc.ingestion_error && <p className="mt-1 text-sm text-amber-800">{doc.ingestion_error}</p>}</div><div className="flex gap-2"><Button variant="outline" onClick={() => void inspect(doc.document_id)}>Inspect</Button>{doc.review_status === "needs_review" && <>{doc.ingestion_error && <Button variant="outline" disabled={busy} onClick={() => void retry(doc.document_id)}>Retry ingestion</Button>}<Button variant="outline" disabled={busy} onClick={() => void review(doc.document_id, "rejected")}>Reject</Button><Button disabled={busy} onClick={() => void review(doc.document_id, "approved")}>Approve</Button></>}</div></div></div>)}
+      {!documents.length && <p className="py-4 text-sm text-muted-foreground">No documents uploaded.</p>}
+    </CardContent></Card>
+    {inspection && <Card className="mt-5"><CardContent className="p-5"><h2 className="font-semibold">Inspection: {inspection.document.original_filename}</h2><p className="mb-4 text-xs text-muted-foreground">{inspection.document.plan_name} · {inspection.document.corpus_status} · {inspection.document.review_status}</p>{inspection.pages.map((page: any) => <details className="border-t py-3" key={page.page_id}><summary className="cursor-pointer font-medium">Page {page.page_number} · {page.section_heading || "Section not detected"} · {page.parse_status}</summary><pre className="mt-2 whitespace-pre-wrap text-xs">{page.extracted_text || "No text extracted"}{page.tables_json?.length ? `\n\nTABLES\n${JSON.stringify(page.tables_json, null, 2)}` : ""}</pre></details>)}<details className="border-t py-3"><summary className="cursor-pointer font-medium">Chunks ({inspection.chunks.length})</summary>{inspection.chunks.map((chunk: any) => <details className="ml-3 border-t py-2" key={chunk.chunk_id}><summary>{chunk.chunk_strategy} · pages {chunk.page_start}–{chunk.page_end}</summary><pre className="whitespace-pre-wrap text-xs">{chunk.chunk_text}\n\n{JSON.stringify(chunk.provenance, null, 2)}</pre></details>)}</details></CardContent></Card>}
+  </div>;
 }
 
 function ChatPage({ question, setQuestion, handleSubmit, loading, turns, setTurns, isAdmin }: {
@@ -293,7 +433,7 @@ function PlansPage({ isAdmin }: { isAdmin: boolean }) {
         <div className="empty-mark"><Icon name="book" /></div>
         <h2>No approved plans yet</h2>
         <p>Plan details will appear here after source documents have been reviewed and approved.</p>
-        {isAdmin && <div className="admin-notice"><strong>Admin workspace</strong><span>Document upload, ingestion status, review, and approval controls will be added with the ingestion workflow.</span><Button className="admin-upload-button" disabled>Upload a plan document</Button></div>}
+        {isAdmin && <div className="admin-notice"><strong>Admin workspace</strong><span>Use Documents in the navigation to upload PDFs, run the local parser, and review parsed evidence.</span></div>}
       </CardContent></Card>
     </div>
   );

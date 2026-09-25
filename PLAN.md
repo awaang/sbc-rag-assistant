@@ -1,6 +1,6 @@
 # Implementation Plan: SBC RAG Demo
 
-This plan records the agreed technology direction and tracks implementation. Phase 1's local frontend/API scaffold, Firebase auth foundation, initial Neon schema migration, and Render Blueprint are implemented. Ingestion, runtime database access, retrieval, and evidence-backed answering remain pending.
+This plan records the agreed technology direction and tracks implementation. The six received PDFs are approved as a provisional development/evaluation corpus, but remain unverified as SBCs and as publicly sourced documents. Phase 1's local frontend/API scaffold, Firebase auth foundation, initial Neon schema migration, and Render Blueprint are implemented. Phase 2 upload, local parsing, chunking, and inspection workflows are implemented; real database ingestion and corpus review remain to be run. Phase 3 benefit extraction and review scaffolding is implemented on top of parsed pages.
 
 ## Selected stack
 
@@ -32,8 +32,8 @@ This plan records the agreed technology direction and tracks implementation. Pha
 
 ### Phase 1 — Corpus and runnable project skeleton
 
-- **Completed project setup:** Six candidate PDFs have been received, provisionally classified in `ARCHITECTURE.md`, and recorded with available file identity/provenance fields in `data/source-documents/received/metadata.json`. Unknown metadata remains null; the candidates remain separate from the qualifying corpus.
-- **Scaffold added:** React + TypeScript + Vite frontend with Firebase email/password registration/sign-in and a post-login page-flow skeleton for Plans, Chat, Profile, and admin-only Playground/Evaluation. Admin navigation reads the Firebase custom claim for presentation; server authorization remains authoritative. Plans/upload, playground, evaluation, and profile-edit actions are placeholders. FastAPI health/chat API currently abstains because no verified corpus or retrieval pipeline is connected.
+- **Completed project setup:** Six PDFs have been received, provisionally classified in `ARCHITECTURE.md`, and recorded with available file identity/provenance fields in `data/source-documents/received/metadata.json`. Unknown metadata remains null; the files are the provisional development corpus but remain unverified as SBCs/public sources.
+- **Scaffold added:** React + TypeScript + Vite frontend with Firebase email/password registration/sign-in, admin document upload/review and benefits review, and placeholder Playground/Evaluation pages. Admin navigation reads the Firebase custom claim for presentation; server authorization remains authoritative. FastAPI chat currently abstains because no retrieval pipeline is connected.
 - [x] Establish a small Python backend and React TypeScript frontend layout; ingestion/evaluation/test directories will be added with those phases.
 - [x] Add dependency/configuration files, local development instructions, `.env.example` containing names only, and ignores for secrets/build outputs.
 - [x] Add Firebase registration/sign-in and FastAPI ID-token verification; Neon relational schema/migration with ordinary embedding values and no pgvector; FastAPI health/API skeleton; local admin-claim bootstrap command; and Render Blueprint without embedded secrets. Protect each authenticated/admin route when it is introduced.
@@ -41,44 +41,46 @@ This plan records the agreed technology direction and tracks implementation. Pha
 
 **Milestone:** Phase 1 implementation is complete. Local commands and deployment configuration are documented. A real deployment still requires Firebase/Neon/Render accounts, credentials, and the manual environment settings in README; external resources have not been provisioned from this repo.
 
-### Corpus prerequisite — select the verified six-document set
+### Provisional corpus and final SBC qualification
 
-- [ ] Select exactly six verified public SBC PDFs; record source URLs, insurer, plan identity/type/year, and confirm the desired HMO, PPO, and HDHP mix where feasible. Current candidates appear not to qualify and contain no identified HDHP SBC.
-- [x] Keep this corpus requirement visible and keep received candidate metadata separate from the verified corpus. Candidate-derived work does not qualify files for the active corpus or final corpus evaluation.
-- [ ] Make practical use of supplied candidates for exploratory parsing, table handling, chunking, extraction, and pipeline development with clear candidate labels. Complete corpus selection before final corpus ingestion and end-to-end evaluation.
+- [x] Use the six received PDFs as the active provisional development/evaluation corpus; preserve their actual document type and their unverified SBC/public-source status.
+- [x] Keep provisional corpus membership distinct from SBC qualification. The set includes dental and vision summaries and has not been established as six standardized medical SBCs.
+- [ ] Resolve final corpus qualification as exactly six public medical SBCs spanning HMO/PPO/HDHP, or document a later approved change to that target. This does not block development or provisional evaluation.
 
-**Milestone:** Six eligible, public SBCs are documented as the active corpus. This is required for final acceptance and representative evaluation, but does not block the project skeleton.
+**Milestone:** The six supplied files are used as a clearly labeled provisional corpus. Final SBC/public-source qualification remains an open acceptance item.
 
 ### Phase 2 — SBC parsing, provenance, and table-safe chunks
 
-- [ ] Build source-document registry and real admin PDF upload, storing original PDFs and upload status in Neon.
-- [ ] Implement the local ingestion CLI: fetch pending uploads, parse pages/tables, preserve section/page and table headers, and report parse issues.
-- [ ] Keep documents and extracted records in pending/review states until an admin approves them; ensure upload alone never makes a document queryable.
-- [ ] Compare fixed-size chunking with semantic/section-aware chunking while never splitting a table row from its interpretive headers/context.
-- [ ] Review parser output on the supplied candidates and fixtures during pipeline development, then on all six verified SBCs once selected; add Camelot only where it improves real table fidelity. Candidate parsing is exploratory and does not qualify a candidate for the corpus.
-- [ ] Add parser/chunker fixtures covering provenance, intact rows, missing sections, and malformed/unreadable pages.
+- [x] Build source-document registry and real admin PDF upload, storing original PDFs and upload status in Neon.
+- [x] Implement the local ingestion CLI: fetch pending uploads, parse pages/tables with pdfplumber, preserve section/page and table headers, and report parse issues.
+- [x] Keep documents and extracted records in pending/review states until an admin approves them; upload leaves documents in `uploaded`, and ingestion moves them to `needs_review`.
+- [x] Compare fixed-size chunking with semantic/section-aware chunking while never splitting a table row from its interpretive headers/context.
+- [ ] Review parser output on all six provisional documents; add Camelot only where it improves table fidelity. If a qualifying SBC corpus is later selected, repeat corpus-specific parser review.
+- [x] Add parser/chunker fixtures covering provenance, intact rows, missing sections, and malformed PDF input.
 
-**Milestone:** Available PDFs produce inspectable pages, table rows, and chunks with traceable provenance. Repeat/complete this review for the six verified SBCs after corpus selection.
+**Milestone:** Upload, local parsing/chunking, inspection, and document review work for the provisional corpus. Review the parsed output on each supplied document before relying on it for provisional evaluation.
 
 ### Phase 3 — Structured benefit extraction and admin review
 
-- [ ] Define typed records for deductible, ER cost sharing, copays, and out-of-pocket maximum, preserving exact SBC wording and distinctions (network, individual/family, deductible/coinsurance).
-- [ ] Extract candidate values with source page/section/table-row references and explicit statuses (`pending_review`, `verified`, `missing`, `ambiguous`, `conflicting`).
-- [ ] Provide admin review/edit/approval UI; only verified values and approved document chunks are queryable.
-- [ ] Measure extraction accuracy against manually verified labeled values by category and plan.
+- [x] Define typed candidate records for deductible, ER cost sharing, copays, and out-of-pocket maximum, preserving source wording, available page/section, and recognizable network/family/individual/coinsurance dimensions.
+- [x] Add conservative candidate extraction that prefers detected table rows and uses page text where tables are unavailable. Candidates remain `pending_review` (or `ambiguous` where a source row contains distinct values); this is a review aid, not an authoritative parser.
+- [x] Add admin-only API operations and a benefit review UI to extract, inspect, correct, and assign review status, with reviewer UID and timestamp.
+- [x] Add an idempotency index for repeated extraction of the same source line.
+- [ ] Verify only reviewed values and approved document evidence are queryable once the answer path is implemented in Phase 5.
+- [ ] Measure extraction accuracy against manually verified labels for the provisional corpus, reporting it as corpus-scoped; repeat on any later qualifying SBC corpus.
 
-**Milestone:** Numerical answers use reviewed, provenance-backed data; uncertain values stay unavailable.
+**Milestone:** Extraction and admin review are implemented. End-to-end answer use depends on Phase 5's evidence gate; measured accuracy must identify the provisional corpus.
 
 ### Phase 4 — BM25 and semantic retrieval baselines
 
 - [ ] Generate sentence-transformer embeddings locally for approved chunks and persist them with chunk IDs/model version in Neon; build the FAISS search index in the API process from approved embeddings and refresh it after approval or ingestion changes.
 - [ ] Add plan/document/section filtering without losing provenance.
-- [ ] Create 20–30 evaluation questions with verified expected evidence locations, answer labels, and question types from the selected corpus.
+- [ ] Create 20–30 evaluation questions with manually checked expected evidence locations, answer labels, and question types drawn from the six provisional documents; label results provisional and corpus-scoped.
 - [ ] Measure the four retrieval/chunking combinations independently (e.g. supporting evidence in top-k) on identical evaluation questions and compare by question type.
 - [ ] Add an admin-only evaluation playground for selecting BM25 or semantic search and fixed-size or semantic/section-aware chunks; show answer/citation diagnostics and detailed result traces to admins.
 - [ ] Record latency and retrieval scores; select runtime retrieval behavior from measured results, retaining both methods for comparison.
 
-**Milestone:** Reproducible retrieval results explain where BM25 and semantic search help or fail.
+**Milestone:** Reproducible provisional retrieval results explain where BM25 and semantic search help or fail on the supplied corpus.
 
 ### Phase 5 — Authenticated answer flow and diagnostics
 
@@ -98,7 +100,7 @@ This plan records the agreed technology direction and tracks implementation. Pha
 
 - [ ] Deploy React static site and FastAPI web service on Render Free; configure Firebase authorized domains and server secrets; connect Neon Free.
 - [ ] Ensure the review UI communicates backend cold start and retries safely; verify upload-to-local-ingestion-to-review-to-answer lifecycle.
-- [ ] Run the labeled set against the selected verified corpus; report answer/extraction accuracy, per-method retrieval results by question type, and latency. Defer token usage reporting until optional Gemini phrasing is enabled.
+- [ ] Run the labeled set against the provisional corpus; report answer/extraction accuracy, per-method retrieval results by question type, and latency, clearly scoped to those documents. Defer token usage reporting until optional Gemini phrasing is enabled.
 - [ ] Document actual chunking/parser/vector choices and observed limits, free-tier behavior, results, and what additional budget would change.
 
 **Milestone:** The deployed demo is reproducible within no-card free-tier constraints and reports measured evidence quality.
@@ -111,7 +113,7 @@ This plan records the agreed technology direction and tracks implementation. Pha
 
 ## Definition of done
 
-- Exactly six verified public SBCs spanning HMO, PPO, and HDHP are in the active corpus.
+- The six received files are the active provisional corpus, with document types and unverified SBC/public-source status represented accurately. Final six-public-SBC qualification remains TBD.
 - Admin uploads are durable; ingestion is real, locally executed, reviewable, and protected by server-enforced Firebase roles.
 - Parsing and chunks preserve table interpretation context and provenance.
 - BM25 and local semantic retrieval are independently evaluated over 20–30 labeled questions.

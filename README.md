@@ -1,6 +1,6 @@
 # SBC RAG Assistant
 
-An authenticated demo for answering questions about health benefit plans from real Summary of Benefits and Coverage (SBC) documents. Correctness, citations, table fidelity, and abstention when evidence is insufficient are core requirements.
+An authenticated demo for answering questions about health benefits from a provisional set of plan documents. The six received files are not verified as standardized SBCs or public-source documents. Correctness, citations, table fidelity, and abstention when evidence is insufficient are core requirements.
 
 ## Project documents
 
@@ -11,11 +11,11 @@ An authenticated demo for answering questions about health benefit plans from re
 
 ## Current status and corpus
 
-This repository contains a minimal React/Vite frontend and FastAPI API scaffold, an initial Neon schema migration, a Render Blueprint, project documentation, and six received candidate PDFs under [`data/source-documents/received/`](data/source-documents/received/). Runtime database access, ingestion, retrieval, evidence-backed answer generation, evaluation data, and tests have not yet been added.
+This repository contains a React/Vite frontend, a FastAPI API, Neon migrations and admin document/benefit review workflows, a Render Blueprint, project documentation, and six received PDFs under [`data/source-documents/received/`](data/source-documents/received/). Those files are the provisional development corpus, not verified SBCs. Local PDF ingestion and row-preserving chunking are implemented. Retrieval, evidence-backed answer generation, and evaluation data remain pending; parser, candidate extraction, and admin upload/authentication tests are in `backend/tests/`.
 
-The signed-in UI has a page-flow skeleton: Plans, Chat (home), Profile, and admin-only Playground and Evaluation navigation. Chat now has a roomy transcript, composer, starter prompts, and a new-chat action. Displayed turns stay in memory and clear when starting a new chat, signing out, or reloading/closing the page. Each question is sent independently to the current API; prior turns are not included as answer context. The Plans, Playground, Evaluation, and Profile actions remain placeholders, and chat returns the safe insufficient-evidence response until an approved corpus and retrieval are connected. Admin navigation uses the Firebase custom claim for visibility only; the API must enforce authorization for all admin operations.
+The signed-in UI has a page-flow skeleton for Plans, Chat (home), Profile, and admin tools. Admins can upload/inspect/review documents and review candidate benefits; Playground and Evaluation remain placeholders. Chat has a transcript, composer, starter prompts, and a new-chat action. Displayed turns stay in memory and clear when starting a new chat, signing out, or reloading/closing the page. Each question is sent independently to the current API; prior turns are not included as answer context. Plans and Profile remain placeholders, and chat returns the safe insufficient-evidence response until approved evidence and retrieval are connected. Admin navigation uses the Firebase custom claim for visibility only; the API enforces authorization on admin operations.
 
-The received PDFs appear to be plan or benefit summaries, including dental and vision summaries, rather than qualifying standardized medical SBC forms. They do not yet meet the requirement for exactly six public SBCs. No HDHP SBC has been identified. The received files and available metadata are inventoried in [`data/source-documents/received/metadata.json`](data/source-documents/received/metadata.json); unknown values are left null. We will make practical use of the supplied PDFs for exploratory parser, table, chunking, extraction, and pipeline development, while labeling their outputs as candidate-derived. This work does not qualify them for the active corpus or final corpus evaluation. Selecting the qualifying corpus is required for final acceptance and representative evaluation, but does not block beginning parser work with candidates. See [ARCHITECTURE.md](ARCHITECTURE.md) for qualification notes. Do not count a candidate toward the corpus until its document type, plan identity, and public source are verified.
+The six PDFs in [`data/source-documents/received/`](data/source-documents/received/) are the provisional development corpus for parsing, retrieval, answer-flow, and evaluation. The metadata in [`metadata.json`](data/source-documents/received/metadata.json) identifies them as unverified; the set includes medical plan/benefit summaries and dental and vision summaries, and public source URLs are not established. Do not describe them as verified SBCs or treat processing/review approval as SBC qualification. Report results as provisional and scoped to these six files. Final qualification of exactly six public standardized medical SBCs with HMO/PPO/HDHP coverage remains TBD and is not a blocker to development.
 
 ## Selected technology direction
 
@@ -30,7 +30,7 @@ The received PDFs appear to be plan or benefit summaries, including dental and v
 
 These selections target a free, no-credit-card demo within provider limits. Free tiers can sleep, pause, change limits, or require account verification; always confirm current terms before deployment. Admin PDF upload will be real. To fit free-host resource limits, the initial design stores uploads in Neon and uses a local authenticated/administrative ingestion command to parse, extract, embed, and write reviewed results back to Neon. Uploaded documents remain pending until extraction and provenance have been reviewed.
 
-Storage capacity has not been estimated because the qualifying SBC files, their page counts, and actual PDF sizes are not yet known. The supplied candidates range from 20 KB to 180 KB and from 2 to 7 pages where page counts are available, but they are not the verified corpus and may not predict its storage needs. Record the selected PDFs' sizes and derived-data volume during ingestion, then compare measured use with the database plan's current limits before deployment. Neon also has a separate compute quota; check actual activity and current provider limits rather than assuming a particular workload will fit. Provider tiers and quotas can change.
+Storage capacity has not been estimated. The current provisional corpus ranges from 20 KB to 180 KB and from 2 to 7 pages where page counts are available. Record PDF sizes and derived-data volume during ingestion, then compare measured use with the database plan's current limits before deployment. Neon also has a separate compute quota; check actual activity and current provider limits rather than assuming a particular workload will fit. Provider tiers and quotas can change.
 
 ## Local development
 
@@ -67,7 +67,21 @@ To create the relational schema in Neon, run this after setting `DATABASE_URL`:
 python -m app.db.migrate
 ```
 
-The initial migration creates the plan, document, parsed-page, chunk, benefit-record, and ordinary embedding-value tables. Embeddings use PostgreSQL `DOUBLE PRECISION[]`; the migration does not install or use pgvector. This schema is a foundation for later ingestion and retrieval work; the API does not use the database yet.
+The migrations create the plan, document, parsed-page/table, chunk, benefit-record, and ordinary embedding-value tables. Embeddings use PostgreSQL `DOUBLE PRECISION[]`; the migrations do not install or use pgvector. Migration `002_benefit_review.sql` adds an idempotency index for source-backed benefit candidates, and `003_document_ingestion.sql` adds page tables and ingestion/review details. Run `python -m app.db.migrate` after pulling schema changes. The API database layer supports admin document upload/review and benefit review; chat retrieval is not connected yet.
+
+### Upload and ingest documents
+
+An admin can upload a PDF from **Documents** in the app, along with plan metadata and an optional public source URL. Uploads are stored in Neon as unverified `candidate` documents with `uploaded` status. The default size limit is 15 MB; configure `MAX_UPLOAD_BYTES` on the API to change it. Uploading does not make a document queryable or establish that it is an SBC.
+
+Install backend dependencies, apply migrations, then run the local ingestion command from `backend/` while `DATABASE_URL` is configured in the repository-root `.env`:
+
+```bash
+python -m app.ingest
+```
+
+The command downloads pending PDFs from Neon, parses page text and table cells with pdfplumber, writes page/table provenance, and creates both fixed-size and section-aware chunks. Table rows stay intact with their headers even when a row exceeds the target chunk size. Parse issues remain visible in the admin Documents page. After processing, inspect pages/chunks and approve or reject the document. Approval admits a document to the provisional development workflow; it does not establish SBC status or public availability. The local CLI needs database credentials and uses local CPU/memory; Render does not run parsing.
+
+Backend parser, candidate extraction, and admin upload/authentication tests are in `backend/tests/`. Run them from `backend/` with `python -m pytest`.
 
 To grant or revoke an admin claim for an existing Firebase account, use the local CLI with the service-account credentials configured above:
 
@@ -88,7 +102,7 @@ npm install
 npm run dev
 ```
 
-Open the URL Vite prints (normally `http://localhost:5173`) and register an account or sign in with an existing Firebase user. The chat endpoint currently returns an explicit insufficient-evidence response because no verified corpus, ingestion pipeline, or retrieval implementation is connected yet. The Debug details section shows response status, citations, and evidence-path information.
+Open the URL Vite prints (normally `http://localhost:5173`) and register an account or sign in with an existing Firebase user. The chat endpoint currently returns an explicit insufficient-evidence response because the provisional corpus and retrieval implementation are not connected yet. The Debug details section shows response status, citations, and evidence-path information.
 
 For a production frontend bundle, run `npm run build` from `frontend/`.
 
@@ -100,7 +114,10 @@ After Render creates both services, set `VITE_API_BASE_URL` on the static site t
 
 ## Planned capabilities
 
-- Ingest exactly six verified public SBCs with table rows, document identity, plan metadata, sections, pages, and source provenance preserved.
+The admin **Benefits review** page can extract candidate benefit values from detected table rows (falling back to parsed page text), preserve source wording and page/section context, and let an admin review or correct each candidate and its dimensions. It requires an uploaded and locally ingested document. Candidate extraction never verifies a value automatically, and the current answer endpoint does not consume reviewed records yet.
+
+- Use the six received PDFs as a provisional development/evaluation corpus, preserving document identity, actual type, coverage type, sections, pages, and provenance. Keep their SBC/public-source status unverified unless independently established.
+- Resolve final qualification of exactly six public standardized medical SBCs spanning HMO/PPO/HDHP; run separate corpus-specific evaluation before making SBC performance claims.
 - Compare fixed-size and section-aware, row-preserving chunking.
 - Independently evaluate BM25 and semantic retrieval using 20–30 labeled questions.
 - Extract deductible, ER cost-sharing, copay, and out-of-pocket maximum values into auditable structured records.
@@ -113,4 +130,4 @@ The initial implementation compares BM25 with one semantic retrieval method: sen
 
 ## Documentation expectations
 
-As implementation proceeds, update this README with setup and run instructions, actual parser and chunking decisions, measured BM25 versus semantic results, extraction accuracy, limitations, and what additional budget would change. Do not report evaluation results until they have been measured against verified SBCs.
+As implementation proceeds, update this README with setup and run instructions, actual parser and chunking decisions, measured BM25 versus semantic results, extraction accuracy, limitations, and what additional budget would change. Clearly label measurements from the current six files as provisional and corpus-scoped; do not present them as results on verified SBCs.
