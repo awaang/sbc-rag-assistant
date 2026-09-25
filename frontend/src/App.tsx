@@ -1,7 +1,8 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type Dispatch, type FormEvent, type KeyboardEvent, type SetStateAction } from "react";
 import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
+  getIdTokenResult,
   signInWithEmailAndPassword,
   signOut,
   type User,
@@ -16,6 +17,23 @@ type ChatResult = {
   answer: string;
   citations: Array<{ plan: string; section: string; page?: number | null }>;
   debug: Record<string, string>;
+};
+
+type ChatTurn = {
+  id: string;
+  question: string;
+  response?: ChatResult;
+  error?: string;
+};
+
+type Page = "plans" | "chat" | "playground" | "evaluation" | "profile";
+
+const pageLabels: Record<Page, string> = {
+  plans: "Plans",
+  chat: "Chat",
+  playground: "Playground",
+  evaluation: "Evaluation",
+  profile: "Profile",
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
@@ -38,13 +56,25 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState("");
   const [question, setQuestion] = useState("");
-  const [result, setResult] = useState<ChatResult | null>(null);
+  const [chatTurns, setChatTurns] = useState<ChatTurn[]>([]);
   const [loading, setLoading] = useState(false);
-  const [chatError, setChatError] = useState("");
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [activePage, setActivePage] = useState<Page>("chat");
 
   useEffect(() => {
     if (!firebaseAuth) return;
-    return onAuthStateChanged(firebaseAuth, setUser);
+    return onAuthStateChanged(firebaseAuth, async (nextUser) => {
+      setUser(nextUser);
+      if (!nextUser) {
+        setIsAdmin(false);
+        setActivePage("chat");
+        setChatTurns([]);
+        setQuestion("");
+        return;
+      }
+      const token = await getIdTokenResult(nextUser);
+      setIsAdmin(token.claims.admin === true);
+    });
   }, []);
 
   async function handleAuth(event: FormEvent) {
@@ -71,24 +101,30 @@ export default function App() {
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    if (!user || !question.trim()) return;
+    const submittedQuestion = question.trim();
+    if (!user || !submittedQuestion || loading) return;
+    const turnId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setChatTurns((turns) => [...turns, { id: turnId, question: submittedQuestion }]);
+    setQuestion("");
     setLoading(true);
-    setChatError("");
-    setResult(null);
     try {
       const token = await user.getIdToken();
       const response = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ question: question.trim() }),
+        body: JSON.stringify({ question: submittedQuestion }),
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => null);
         throw new Error(payload?.detail || `Request failed (${response.status}).`);
       }
-      setResult((await response.json()) as ChatResult);
+      const answer = (await response.json()) as ChatResult;
+      if (firebaseAuth?.currentUser?.uid !== user.uid) return;
+      setChatTurns((turns) => turns.map((turn) => turn.id === turnId ? { ...turn, response: answer } : turn));
     } catch (error) {
-      setChatError(error instanceof Error ? error.message : "Could not reach the API. Check that it is running.");
+      const message = error instanceof Error ? error.message : "Could not reach the API. Check that it is running.";
+      if (firebaseAuth?.currentUser?.uid !== user.uid) return;
+      setChatTurns((turns) => turns.map((turn) => turn.id === turnId ? { ...turn, error: message } : turn));
     } finally {
       setLoading(false);
     }
@@ -127,52 +163,173 @@ export default function App() {
     );
   }
 
+  const visiblePages: Page[] = isAdmin
+    ? ["plans", "chat", "playground", "evaluation", "profile"]
+    : ["plans", "chat", "profile"];
+  const page = visiblePages.includes(activePage) ? activePage : "chat";
+
   return (
-    <main className="page-shell">
-      <header className="topbar">
+      <main className={`page-shell ${page === "chat" ? "chat-shell" : ""}`}>
+      <header className="topbar app-topbar">
         <Brand />
-        <div className="flex items-center gap-3">
-          <span className="hidden text-sm text-muted-foreground sm:block">{user.email}</span>
+        <nav className="page-nav" aria-label="Main navigation">
+          {visiblePages.map((item) => (
+            <button key={item} type="button" className={`nav-link ${page === item ? "active" : ""}`} aria-current={page === item ? "page" : undefined} onClick={() => setActivePage(item)}>
+              {pageLabels[item]}
+            </button>
+          ))}
+        </nav>
+        <div className="account-actions">
+          <span className={`role-badge ${isAdmin ? "admin" : ""}`}>{isAdmin ? "Admin" : "Member"}</span>
+          <span className="account-email">{user.email}</span>
           <Button variant="ghost" size="icon" aria-label="Sign out" title="Sign out" onClick={() => firebaseAuth && signOut(firebaseAuth)}><Icon name="logout" /></Button>
         </div>
       </header>
 
-      <section className="hero-wrap">
-        <div className="hero-copy">
-          <div className="eyebrow flex items-center gap-2"><span className="status-dot" /> BENEFITS, MADE CLEAR</div>
-          <h1>Understand your<br /><span>health plan.</span></h1>
-          <p>Ask a question about plan costs and coverage. Answers are designed to be grounded in source documents, with citations you can check.</p>
-        </div>
-
-        <Card className="chat-card">
-          <CardContent className="p-5 sm:p-7">
-            <div className="flex items-start justify-between gap-4">
-              <div><div className="card-kicker"><Icon name="spark" /> SBC ASSISTANT</div><h2 className="mt-2 text-lg font-semibold">What would you like to know?</h2></div>
-              <span className="secure-badge"><Icon name="shield" /> Secure</span>
-            </div>
-            <form onSubmit={handleSubmit} className="mt-6">
-              <label htmlFor="question" className="sr-only">Your question</label>
-              <Textarea id="question" value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="For example: What is the deductible for the HMO plan?" maxLength={2000} required />
-              <div className="mt-3 flex flex-col-reverse items-start justify-between gap-3 sm:flex-row sm:items-center">
-                <p className="text-xs text-muted-foreground">Answers may be limited while the document corpus is being prepared.</p>
-                <Button type="submit" disabled={loading || !question.trim()}><span>{loading ? "Checking…" : "Ask question"}</span><Icon name="send" /></Button>
-              </div>
-            </form>
-
-            {chatError && <div role="alert" className="mt-5 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{chatError}</div>}
-            {result && <Answer result={result} />}
-            <details className="debug-details">
-              <summary><span>Debug details</span><span className="debug-hint">Evidence path &amp; request status</span></summary>
-              {result ? <pre>{JSON.stringify({ status: result.status, citations: result.citations, ...result.debug }, null, 2)}</pre> : <p className="debug-empty">Submit a question to see request and evidence diagnostics.</p>}
-            </details>
-          </CardContent>
-        </Card>
-
-        <div className="trust-note"><Icon name="book" /><span>Responses should cite the plan document and relevant section when supporting evidence is available.</span></div>
+      <section className={`app-content ${page === "chat" ? "chat-content" : ""}`}>
+        {page === "chat" && <ChatPage question={question} setQuestion={setQuestion} handleSubmit={handleSubmit} loading={loading} turns={chatTurns} setTurns={setChatTurns} isAdmin={isAdmin} />}
+        {page === "plans" && <PlansPage isAdmin={isAdmin} />}
+        {page === "playground" && isAdmin && <PlaceholderPage page="playground" />}
+        {page === "evaluation" && isAdmin && <PlaceholderPage page="evaluation" />}
+        {page === "profile" && <ProfilePage user={user} isAdmin={isAdmin} />}
       </section>
       <footer className="site-footer"><span>SBC ASSISTANT</span><span>For plan information only · Not medical advice</span></footer>
     </main>
   );
+}
+
+function ChatPage({ question, setQuestion, handleSubmit, loading, turns, setTurns, isAdmin }: {
+  question: string;
+  setQuestion: (value: string) => void;
+  handleSubmit: (event: FormEvent) => void;
+  loading: boolean;
+  turns: ChatTurn[];
+  setTurns: Dispatch<SetStateAction<ChatTurn[]>>;
+  isAdmin: boolean;
+}) {
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+
+  useEffect(() => {
+    transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: "smooth" });
+  }, [turns, loading]);
+
+  function startNewChat() {
+    if (loading) return;
+    setTurns([]);
+    setQuestion("");
+  }
+
+  function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      formRef.current?.requestSubmit();
+    }
+  }
+
+  return (
+    <div className="chat-page">
+      <div className="chat-toolbar">
+        <div><div className="chat-toolbar-title">SBC Assistant</div><div className="chat-toolbar-subtitle">Answers grounded in plan documents</div></div>
+        <Button variant="outline" className="new-chat-button" onClick={startNewChat} disabled={loading}>+ <span>New chat</span></Button>
+      </div>
+
+      <div className="transcript-scroll" ref={transcriptRef} role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions">
+        {turns.length === 0 ? (
+          <div className="chat-welcome">
+            <div className="welcome-mark"><Icon name="spark" /></div>
+            <h1>What would you like to know?</h1>
+            <p>Ask about deductibles, copays, or compare coverage across plans.</p>
+            <div className="prompt-suggestions">
+              {["What does my plan cover in the emergency room?", "How do deductibles compare across plans?", "What is the out-of-pocket maximum?"] .map((prompt) => (
+                <button type="button" key={prompt} onClick={() => setQuestion(prompt)}>{prompt}</button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="transcript-inner">
+            {turns.map((turn) => <ConversationTurn key={turn.id} turn={turn} isAdmin={isAdmin} loading={loading && !turn.response && !turn.error} />)}
+          </div>
+        )}
+      </div>
+
+      <div className="composer-region">
+        <form className="chat-composer" ref={formRef} onSubmit={handleSubmit}>
+          <label htmlFor="question" className="sr-only">Message SBC Assistant</label>
+          <Textarea id="question" className="composer-textarea" value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={handleComposerKeyDown} placeholder="Message SBC Assistant…" maxLength={2000} required />
+          <div className="composer-bottom"><span>Enter to send · Shift+Enter for a new line</span><Button className="send-button" type="submit" size="icon" aria-label="Send message" disabled={loading || !question.trim()}><Icon name="send" /></Button></div>
+        </form>
+        <p className="composer-note">Answers are limited to evidence in the available plan documents.</p>
+      </div>
+    </div>
+  );
+}
+
+function ConversationTurn({ turn, isAdmin, loading }: { turn: ChatTurn; isAdmin: boolean; loading: boolean }) {
+  return (
+    <article className="conversation-turn">
+      <div className="user-message-row"><div className="user-message">{turn.question}</div></div>
+      <div className="assistant-message-row">
+        <div className="assistant-avatar"><Icon name="spark" /></div>
+        <div className="assistant-message">
+          {turn.response ? <Answer result={turn.response} /> : turn.error ? <p className="chat-error" role="alert">{turn.error}</p> : loading ? <div className="thinking-state"><span /> <span /> <span /><em>Checking the available plan evidence…</em></div> : null}
+          {turn.response && <details className="debug-details">
+            <summary><span>{isAdmin ? "Debug details" : "Answer details"}</span><span className="debug-hint">Evidence path &amp; request status</span></summary>
+            <pre>{JSON.stringify(isAdmin
+              ? { status: turn.response.status, citations: turn.response.citations, ...turn.response.debug }
+              : { status: turn.response.status, citations: turn.response.citations, evidence_path: turn.response.debug.evidence_path }, null, 2)}</pre>
+          </details>}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function PlansPage({ isAdmin }: { isAdmin: boolean }) {
+  return (
+    <div className="content-page">
+      <PageHeading eyebrow="PLAN LIBRARY" title="Plans" description="Browse the plans available in the approved document collection." />
+      <Card><CardContent className="empty-state">
+        <div className="empty-mark"><Icon name="book" /></div>
+        <h2>No approved plans yet</h2>
+        <p>Plan details will appear here after source documents have been reviewed and approved.</p>
+        {isAdmin && <div className="admin-notice"><strong>Admin workspace</strong><span>Document upload, ingestion status, review, and approval controls will be added with the ingestion workflow.</span><Button className="admin-upload-button" disabled>Upload a plan document</Button></div>}
+      </CardContent></Card>
+    </div>
+  );
+}
+
+function PlaceholderPage({ page }: { page: "playground" | "evaluation" }) {
+  const playground = page === "playground";
+  return (
+    <div className="content-page">
+      <PageHeading eyebrow={playground ? "ADMIN TOOLS" : "QUALITY REVIEW"} title={playground ? "Retrieval playground" : "Evaluation set"} description={playground ? "Compare retrieval methods and chunking strategies against a question." : "Review the labeled question set and measured answer, retrieval, and latency results."} />
+      <Card><CardContent className="empty-state">
+        <div className="coming-soon">SKELETON</div>
+        <h2>{playground ? "Experiment controls are coming next" : "Evaluation workspace is coming next"}</h2>
+        <p>{playground ? "This admin-only page will let you choose BM25 or semantic search, select a chunking strategy, and inspect evidence diagnostics." : "This admin-only page will hold the versioned 20–30 question set and show measured results after the corpus and evaluation runner are ready."}</p>
+        {playground && <div className="placeholder-controls"><label>Retrieval method<select disabled defaultValue=""><option value="">Choose a method</option><option>BM25</option><option>Semantic (FAISS)</option></select></label><label>Chunking strategy<select disabled defaultValue=""><option value="">Choose a strategy</option><option>Fixed-size</option><option>Section-aware</option></select></label><Button disabled>Run comparison</Button></div>}
+        {!playground && <div className="evaluation-stats"><span><strong>20–30</strong> target questions</span><span><strong>4</strong> retrieval/chunking combinations</span><span><strong>0</strong> measured runs</span></div>}
+      </CardContent></Card>
+    </div>
+  );
+}
+
+function ProfilePage({ user, isAdmin }: { user: User; isAdmin: boolean }) {
+  return (
+    <div className="content-page">
+      <PageHeading eyebrow="ACCOUNT" title="Profile" description="View your signed-in account and access level." />
+      <Card><CardContent className="profile-card">
+        <div className="profile-avatar">{(user.email || "U").slice(0, 1).toUpperCase()}</div>
+        <div className="profile-details"><span className="eyebrow">EMAIL</span><strong>{user.email || "No email address"}</strong><span className="eyebrow">ACCESS</span><strong>{isAdmin ? "Admin" : "Member"}</strong><span className="eyebrow">ACCOUNT ID</span><code>{user.uid}</code></div>
+        <div className="profile-actions"><Button variant="outline" disabled>Edit profile</Button><Button variant="outline" disabled>Delete account</Button><p>Profile editing and account deletion are not connected yet.</p></div>
+      </CardContent></Card>
+    </div>
+  );
+}
+
+function PageHeading({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) {
+  return <div className="page-heading"><p className="eyebrow">{eyebrow}</p><h1>{title}</h1><p>{description}</p></div>;
 }
 
 function authMessage(error: unknown, mode: "signin" | "register"): string {

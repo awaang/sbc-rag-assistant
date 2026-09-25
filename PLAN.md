@@ -32,8 +32,8 @@ This plan records the agreed technology direction and tracks implementation. Pha
 
 ### Phase 1 — Corpus and runnable project skeleton
 
-- **Completed project setup:** Six candidate PDFs have been received and provisionally classified in `ARCHITECTURE.md`; they remain separate from the qualifying corpus.
-- **Scaffold added:** React + TypeScript + Vite frontend with shadcn-style UI primitives, Firebase email/password registration/sign-in, a chat form with collapsible diagnostics, and a FastAPI health/chat API. The protected chat endpoint currently abstains because there is no verified corpus or retrieval pipeline yet.
+- **Completed project setup:** Six candidate PDFs have been received, provisionally classified in `ARCHITECTURE.md`, and recorded with available file identity/provenance fields in `data/source-documents/received/metadata.json`. Unknown metadata remains null; the candidates remain separate from the qualifying corpus.
+- **Scaffold added:** React + TypeScript + Vite frontend with Firebase email/password registration/sign-in and a post-login page-flow skeleton for Plans, Chat, Profile, and admin-only Playground/Evaluation. Admin navigation reads the Firebase custom claim for presentation; server authorization remains authoritative. Plans/upload, playground, evaluation, and profile-edit actions are placeholders. FastAPI health/chat API currently abstains because no verified corpus or retrieval pipeline is connected.
 - [x] Establish a small Python backend and React TypeScript frontend layout; ingestion/evaluation/test directories will be added with those phases.
 - [x] Add dependency/configuration files, local development instructions, `.env.example` containing names only, and ignores for secrets/build outputs.
 - [x] Add Firebase registration/sign-in and FastAPI ID-token verification; Neon relational schema/migration with ordinary embedding values and no pgvector; FastAPI health/API skeleton; local admin-claim bootstrap command; and Render Blueprint without embedded secrets. Protect each authenticated/admin route when it is introduced.
@@ -44,7 +44,8 @@ This plan records the agreed technology direction and tracks implementation. Pha
 ### Corpus prerequisite — select the verified six-document set
 
 - [ ] Select exactly six verified public SBC PDFs; record source URLs, insurer, plan identity/type/year, and confirm the desired HMO, PPO, and HDHP mix where feasible. Current candidates appear not to qualify and contain no identified HDHP SBC.
-- [ ] Keep this corpus requirement visible, and make practical use of the supplied candidates for exploratory parsing, table handling, chunking, extraction, and pipeline development with clear candidate labels. Candidate work does not qualify files for the active corpus or final corpus evaluation. Complete corpus selection before final corpus ingestion and end-to-end evaluation.
+- [x] Keep this corpus requirement visible and keep received candidate metadata separate from the verified corpus. Candidate-derived work does not qualify files for the active corpus or final corpus evaluation.
+- [ ] Make practical use of supplied candidates for exploratory parsing, table handling, chunking, extraction, and pipeline development with clear candidate labels. Complete corpus selection before final corpus ingestion and end-to-end evaluation.
 
 **Milestone:** Six eligible, public SBCs are documented as the active corpus. This is required for final acceptance and representative evaluation, but does not block the project skeleton.
 
@@ -82,6 +83,7 @@ This plan records the agreed technology direction and tracks implementation. Pha
 ### Phase 5 — Authenticated answer flow and diagnostics
 
 - [ ] Confirm Firebase token verification on every protected FastAPI request and admin custom claims on every upload/review/ingestion-management endpoint; these checks are implemented alongside the endpoints and covered here with authorization review.
+- [ ] Complete the session-only, multi-turn ChatGPT-style conversation. The roomy transcript/composer and in-memory turn display are implemented; each question is still sent independently, so prior-turn context is not yet used by the answer API. Keep messages volatile and do not add chat-history persistence or history APIs.
 - [ ] Resolve plans and ask for clarification for ambiguous names.
 - [ ] Route numerical lookups and comparisons through verified structured records; use retrieval evidence for broader coverage questions.
 - [ ] Apply provenance/evidence gate, conflict checks, citation validation, and explicit abstention before any synthesis.

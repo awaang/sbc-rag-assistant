@@ -2,9 +2,11 @@
 
 ## Purpose and status
 
-The demo answers questions about health plan costs and coverage from exactly six verified public Summary of Benefits and Coverage (SBC) PDFs. Its core requirements are correctness, traceable citations, table fidelity, and abstention when evidence is insufficient. The repository now has a minimal React/Vite frontend and FastAPI API scaffold. Ingestion, persistence, retrieval, and evidence-backed answer generation are not implemented yet.
+The demo answers questions about health plan costs and coverage from exactly six verified public Summary of Benefits and Coverage (SBC) PDFs. Its core requirements are correctness, traceable citations, table fidelity, and abstention when evidence is insufficient. The repository now has a minimal React/Vite frontend and FastAPI API scaffold, an initial relational schema migration, and a Render Blueprint. Runtime database access, ingestion, retrieval, and evidence-backed answer generation are not implemented yet.
 
 Six supplied candidate PDFs are stored in `data/source-documents/received/`. Based on titles and inspected contents, they appear to be plan or benefit summaries, including dental and vision summaries, rather than standardized medical SBCs. They do not qualify for the active corpus unless the scope is deliberately changed. No HDHP SBC has been identified yet; this is an open corpus gap, not a blocker to beginning implementation, and an HDHP SBC may be added later. Exact corpus membership remains **TBD**.
+
+The received-file metadata manifest is [`data/source-documents/received/metadata.json`](data/source-documents/received/metadata.json). It records provisional identities, file sizes and checksums, available dates/page counts, and explicit nulls for unknown values. These records do not establish public availability or SBC eligibility; verify both independently before adding a document to the active corpus.
 
 Use the supplied candidates for exploratory development wherever useful, including parser inspection, table handling, chunking, extraction, and ingestion workflow work. Label all results as candidate-derived; candidate use does not qualify a file for the verified corpus or final corpus evaluation. Re-run and verify the pipeline against the selected public SBC corpus before final evaluation.
 
@@ -76,13 +78,17 @@ Every factual answer cites plan and SBC section, adding page when available. The
 
 ## Interface and diagnostics
 
+The signed-in frontend has a page-flow skeleton: all users can navigate to Plans, Chat (the default home page), and Profile; users with the Firebase admin claim also see the Playground and Evaluation pages. The claim controls navigation visibility only and does not grant API access. Upload/review, retrieval experiments, evaluation runs, profile edits, and account deletion are placeholders until their backed workflows are implemented.
+
+The chat page has a roomy transcript, composer, starter prompts, and a new-chat action. Displayed turns are held in frontend memory for the active page session only and clear on new chat, sign-out, reload, or page close. Live message text is not saved to Neon, local storage, session storage, or the evaluation manifest. At this stage, each submitted question is sent independently; prior turns are displayed but are not included as context in later API requests. Evaluation questions remain separately authored test data; persisted evaluation records contain results/metrics without ordinary live query text.
+
 Logical API responses distinguish `answered`, `insufficient_evidence`, and `clarification_needed`, include a concise answer when supported, and carry citations. The scaffold exposes `GET /api/health` and protected `POST /api/chat`; chat currently returns a deterministic insufficient-evidence response until a verified corpus and retrieval pipeline exist. The frontend uses Firebase email/password sign-in and sends an ID token as a bearer token. FastAPI verifies the token server-side and fails closed when Firebase credentials are not configured.
 
 All authenticated users see basic diagnostics: resolved plan names, answer/abstention status, cited sources, and a concise indication of the evidence path (structured lookup or retrieval). The admin-only evaluation playground exposes selectable BM25/vector and fixed-size/semantic-section-aware configurations. Admins also see ranked retrieved chunks, scores, parse/extraction/review status, ingestion errors, embedding/index versions, and evidence-gate details. Never expose credentials, tokens, privileged configuration, or raw internal stack traces.
 
 ## Evaluation and open implementation checks
 
-Maintain 20–30 questions with verified answers and supporting source locations. Measure all four BM25/vector × fixed-size/semantic-section-aware combinations independently by question type, plus extraction accuracy against manual verification, answer accuracy, and latency. Token usage is deferred until optional Gemini phrasing is enabled. Do not retain ordinary user query text by default; evaluation manifest questions are authored test data, and live queries are not added to that manifest. Document actual results and limitations in README; do not invent baselines.
+Maintain 20–30 questions with verified answers and supporting source locations. Measure all four BM25/vector × fixed-size/semantic-section-aware combinations independently by question type, plus extraction accuracy against manual verification, answer accuracy, and latency. Token usage is deferred until optional Gemini phrasing is enabled. Live chat transcripts exist in frontend memory only and are not retained after the active page session; evaluation manifest questions are separately authored test data and live queries are never added to that manifest. Document actual results and limitations in README; do not invent baselines.
 
 Before relying on the design, verify: the six documents are valid public SBCs with HMO/PPO/HDHP coverage; the deployed API can build/refresh its in-memory FAISS index from approved embedding records in Neon; chosen sentence-transformer model size/startup fits local ingestion; Neon storage fits PDFs plus derived data; Render/Firebase/Neon no-card plans remain available to the account; and upload/admin/local-ingestion-to-review flow works end to end.
 

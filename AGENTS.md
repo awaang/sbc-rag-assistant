@@ -21,6 +21,7 @@ Build a demo that answers questions about health benefit plans using exactly six
 - Keep the core constraints visible in implementation: exactly six verified public SBCs; aim for HMO/PPO/HDHP coverage while treating the currently missing HDHP SBC as an open corpus gap, not a prerequisite to start; table-preserving parsing/chunking with provenance; BM25 and local sentence-transformer embeddings searched with FAISS; structured benefit extraction; deterministic answer formatting in the initial implementation; Gemini is explicitly deferred to a later phase and must remain an evidence-bound phrasing addition; citations and abstention; Firebase authentication with server-enforced admin roles; real admin upload/review with local ingestion; and 20–30-question evaluation.
 - Keep the roles distinct: sentence-transformers generates embeddings locally, FAISS performs local vector search, and Neon Postgres stores durable relational application data. Do not duplicate vectors in pgvector unless a later requirement justifies changing the selected vector index.
 - Do not substitute hosted embeddings or managed file-search RAG. An LLM is optional and must remain a thin final phrasing step; it may never provide unsupported benefit facts.
+- Keep live chat transcripts in frontend memory for the active page session only; clear them on new chat, sign-out, reload, or page close. Do not persist ordinary user messages to Neon, browser storage, or the evaluation manifest.
 
 ## Project structure
 
@@ -36,6 +37,7 @@ The repository contains project documentation and environment configuration at i
 - `backend/migrations/` — ordered PostgreSQL schema migrations; embeddings are ordinary array values, not pgvector.
 - `frontend/` — React + TypeScript + Vite UI, Tailwind styling, and shadcn-style components.
 - `render.yaml` — Render Blueprint for the static frontend and API service; account-specific secrets stay in Render's environment settings.
+- `data/source-documents/received/metadata.json` — provisional metadata for received candidate PDFs; null values are unknown and records do not establish SBC eligibility.
 
 Evaluation and test code directories have not been established yet. Inspect the current tree before assuming a path or creating a new structure. Keep the layout small and clear; update this section if major directories are introduced.
 

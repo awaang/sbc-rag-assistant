@@ -89,6 +89,7 @@ Users must authenticate before accessing the question-answering application. Fir
 
 7. **User interface**
    - Provide a simple interface for authentication, question submission, answers or abstentions, and citations. Visual polish and additional UI features are out of scope.
+   - Present a multi-turn, ChatGPT-style conversation in the chat page. Keep the active conversation transcript in browser memory only; clear it when the user starts a new chat, signs out, or reloads/closes the page. Do not persist ordinary chat messages to the backend or browser storage.
    - Provide real admin PDF upload, processing status, parsed evidence/extraction review, and approval controls. The local ingestion command performs PDF parsing and embedding generation to stay within free-host resource limits.
    - Show basic diagnostics to all users and advanced diagnostics only to admins.
    - Provide an admin-only evaluation playground to select BM25 or semantic search and fixed-size or semantic/section-aware chunks. Detailed rank and score traces remain admin-only.
@@ -103,7 +104,7 @@ Users must authenticate before accessing the question-answering application. Fir
 - **Performance targets:** Acceptable latency thresholds are **TBD**.
 - **Security:** Authentication and admin roles are enforced server-side; privileged Firebase credentials never enter browser code or source control.
 - **Deployment:** Run locally and deploy on no-card free tiers. Free-tier sleep/cold starts, quotas, and provider availability are acceptable demo limitations; uninterrupted availability is not promised.
-- **Privacy/query retention:** Do not retain ordinary user query text by default. The versioned 20–30-question evaluation manifest may retain its authored questions and expected answers/evidence because they are required test data; do not add live user queries to it. Store aggregate evaluation metrics and per-run identifiers/results without ordinary user query text unless a later, documented requirement calls for it.
+- **Privacy/query retention:** The UI may hold ordinary user messages and answers in browser memory for the active conversation only; clear them on new chat, sign-out, reload, or page close. Do not persist live chat messages to the backend, local storage, session storage, or the evaluation manifest. The versioned 20–30-question evaluation manifest may retain its authored questions and expected answers/evidence as test data. Store aggregate evaluation metrics and per-run identifiers/results without ordinary user query text.
 
 ## Acceptance criteria
 
@@ -115,6 +116,7 @@ Users must authenticate before accessing the question-answering application. Fir
 - [ ] Fixed-size and semantic/section-aware chunking are each evaluated with both retrieval methods, and an admin-only evaluation playground lets admins compare the configurations.
 - [ ] Deductible, ER cost sharing, copay, and out-of-pocket maximum values are extracted into a per-plan structured representation with traceable source references, and extraction accuracy is measured against verified values.
 - [ ] The tool can answer supported single-plan and cross-plan questions, including numerical benefit questions.
+- [ ] The chat UI shows a multi-turn conversation during the active page session and clears the transcript on new chat, sign-out, and reload; ordinary messages are not persisted.
 - [ ] Every generated answer cites its source plan and SBC section, with page when available.
 - [ ] For low-confidence or unsupported questions, the tool reports insufficient evidence rather than guessing.
 - [ ] Per-query accuracy and latency are measured. Token usage is measured only if optional Gemini phrasing is enabled.
