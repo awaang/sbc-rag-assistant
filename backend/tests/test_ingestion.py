@@ -88,3 +88,23 @@ def test_parse_keeps_rows_before_and_at_a_later_header(monkeypatch):
     assert [unit["row_number"] for unit in units] == [1, 2, 3, 4]
     assert units[0]["headers"] == []
     assert units[-1]["headers"] == ["", "In Network", "Out of Network"]
+
+
+def test_parse_removes_repeated_value_from_unheaded_helper_column(monkeypatch):
+    class Page:
+        def extract_text(self):
+            return "PLAN FEATURES"
+
+        def extract_tables(self):
+            return [[
+                ["", "PLAN FEATURES", "", "", "IN-NETWORK", ""],
+                ["", "Out-of-Pocket Maximum", "", "$2,500 Individual", "$2,500 Individual", ""],
+            ]]
+
+    @contextmanager
+    def fake_pdf(_bytes):
+        yield type("PDF", (), {"pages": [Page()]})()
+
+    monkeypatch.setattr(ingestion.pdfplumber, "open", fake_pdf)
+    table = parse_pdf(b"%PDF-test")[0]["tables"][0]
+    assert table["rows"][1] == ["", "Out-of-Pocket Maximum", "", "", "$2,500 Individual", ""]

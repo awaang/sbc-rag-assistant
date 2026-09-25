@@ -45,6 +45,22 @@ def _header_index(rows: list[list[str]]) -> int | None:
     return best[1] if best else None
 
 
+def _remove_headerless_adjacent_duplicates(rows: list[list[str]], header_index: int | None) -> list[list[str]]:
+    """Drop a duplicated cell only when the duplicate sits beside its labeled column."""
+    if header_index is None:
+        return rows
+    headers = rows[header_index]
+    cleaned = [list(row) for row in rows]
+    for row_index, row in enumerate(cleaned):
+        if row_index <= header_index:
+            continue
+        for index in range(1, min(len(row), len(headers))):
+            if (row[index] and row[index] == row[index - 1]
+                    and headers[index] and not headers[index - 1]):
+                row[index - 1] = ""
+    return cleaned
+
+
 def iter_table_rows(table: dict[str, Any]):
     """Yield all extracted rows with headers only after a detected header row."""
     header_index = table.get("header_row_index")
@@ -66,6 +82,7 @@ def parse_pdf(pdf_bytes: bytes) -> list[dict[str, Any]]:
                 if not rows:
                     continue
                 header_index = _header_index(rows)
+                rows = _remove_headerless_adjacent_duplicates(rows, header_index)
                 tables.append({"headers": rows[header_index] if header_index is not None else [],
                                "header_row_index": header_index if header_index is not None else -1,
                                "rows": rows})

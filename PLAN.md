@@ -65,7 +65,8 @@ Evidence review fixes retain every extracted table row, exclude ineligible docum
 ### Phase 3 — Structured benefit extraction and admin review
 
 - [x] Define typed candidate records for deductible, ER cost sharing, copays, and out-of-pocket maximum, preserving source wording, available page/section, and recognizable network/family/individual/coinsurance dimensions.
-- [x] Add conservative candidate extraction that prefers detected table rows and uses page text where tables are unavailable. Candidates remain `pending_review` (or `ambiguous` where a source row contains distinct values); this is a review aid, not an authoritative parser.
+- [x] Add table-aware candidate extraction that carries benefit labels and period context across continuation rows, separates individual/family and network values, and keeps all candidates pending review. Page text remains a fallback where tables are unavailable; extraction remains a review aid, not an authoritative parser.
+- [x] Add regression coverage for the Aetna out-of-pocket maximum table, multi-network continuation rows, values combined in one cell, and repeated headerless table cells.
 - [x] Add admin-only API operations and a benefit review UI to extract, inspect, correct, and assign review status, with reviewer UID and timestamp.
 - [x] Add an idempotency index for repeated extraction of the same source line.
 - [x] Gate answer queries on verified benefit values and approved document evidence. End-to-end corpus review remains open.

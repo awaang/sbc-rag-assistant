@@ -22,7 +22,7 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 from app.benefits import extract_candidates
 from app.answering import answer_question
-from app.ingestion import iter_table_rows, parse_pdf
+from app.ingestion import parse_pdf
 from app.retrieval import EmbeddingDataError, MODEL_NAME, MODEL_VERSION, model_fingerprint, retrieve
 
 app = FastAPI(title="SBC Assistant API", version="0.1.0")
@@ -490,20 +490,10 @@ def extract_document_benefits(
     ).fetchall()
     if not pages:
         raise HTTPException(status_code=409, detail="The document has no parsed pages. Complete Phase 2 ingestion first.")
-    extraction_pages = []
-    for row in pages:
-        page = dict(row)
-        table_lines = []
-        for table in page.pop("tables_json") or []:
-            for _, headers, cells in iter_table_rows(table):
-                table_lines.append(" | ".join(
-                    f"{headers[index] if index < len(headers) and headers[index] else f'Column {index + 1}'}: {cell}"
-                    for index, cell in enumerate(cells) if cell
-                ))
-        # Prefer table rows when a page has detected tables: pdfplumber's flat
-        # text often interleaves columns and duplicates the same benefit row.
-        page["text"] = "\n".join(table_lines) if table_lines else page["text"]
-        extraction_pages.append(page)
+    extraction_pages = [
+        {**dict(row), "tables": row.get("tables_json") or []}
+        for row in pages
+    ]
     candidates = extract_candidates(extraction_pages)
     inserted = 0
     with connection.transaction():

@@ -191,7 +191,7 @@ def make_document_embeddings(connection, batch_size: int = 32) -> dict[str, int]
              AND e.model_name = %s AND e.model_version = %s
            WHERE d.review_status = 'approved' AND d.corpus_status <> 'ineligible'
              AND (e.embedding_id IS NULL OR e.model_fingerprint IS DISTINCT FROM %s)
-           ORDER BY c.chunk_id""", (MODEL_NAME, MODEL_VERSION)
+           ORDER BY c.chunk_id""", (MODEL_NAME, MODEL_VERSION, fingerprint)
     ).fetchall()
     inserted = 0
     for offset in range(0, len(rows), batch_size):
