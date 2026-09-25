@@ -54,6 +54,7 @@ Users must authenticate before accessing the question-answering application. Fir
    - Preserve benefit rows and their context during chunking; a table row must not be split across chunks.
    - Explore fixed-size and semantic chunking and document the selected strategy and its tradeoffs.
    - Record parsing, chunking, benefit extraction, and embedding stages. `ready` and `ready_with_warnings` require all stages to complete and enough current embeddings for retrieval. Processing, incomplete, and critically failed documents remain unavailable. Preserve previously approved documents as queryable.
+   - Treat an authenticated admin upload as already reviewed by that admin. After successful processing, approve it automatically for questions, with warnings retained. No document verification click is required. This approval does not establish SBC status or public availability.
    - Treat an isolated page parse failure, one ambiguous benefit, or a table extraction failure as a warning when other usable evidence remains. An unreadable PDF, essentially no usable text, unknown plan identity, processing crash, or insufficient embeddings is critical. A completed command alone does not establish readiness.
 
 2. **Retrieval**
@@ -94,7 +95,7 @@ Users must authenticate before accessing the question-answering application. Fir
 7. **User interface**
    - Provide a simple interface for authentication, question submission, answers or abstentions, and citations. Visual polish and additional UI features are out of scope.
    - Present a multi-turn, ChatGPT-style conversation in the chat page. Keep the active conversation transcript in browser memory only; clear it when the user starts a new chat, signs out, or reloads/closes the page. Do not persist ordinary chat messages to the backend or browser storage.
-   - Provide real admin PDF upload, automatic processing, per-stage status and warnings, parsed evidence/extraction review, and optional verification controls. The FastAPI service runs parsing and embedding after upload; local maintenance commands use the same pipeline.
+   - Provide real admin PDF upload, automatic processing and approval, per-stage status and warnings, and parsed evidence/extraction inspection. The FastAPI service runs parsing and embedding after upload; local maintenance commands use the same pipeline.
    - Show basic diagnostics to all users and advanced diagnostics only to admins.
    - Provide an admin-only evaluation playground to select BM25 or semantic search and fixed-size or semantic/section-aware chunks. Detailed rank and score traces remain admin-only.
 

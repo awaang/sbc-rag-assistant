@@ -28,6 +28,9 @@ class Connection:
     def commit(self):
         pass
 
+    def rollback(self):
+        pass
+
     def execute(self, sql, params=None):
         if "UPDATE documents SET processing_stages" in sql:
             self.updates.append(params)
@@ -76,6 +79,13 @@ def test_pipeline_preserves_warning_and_promotes_usable_evidence(monkeypatch):
     assert result["candidates"] == 1
     assert connection.updates[-1][2] == "ready_with_warnings"
     assert connection.updates[-1][0].obj["embedding"] == "completed"
+
+    uploaded = pipeline.process_document(
+        connection, {**_document(), "uploaded_by_firebase_uid": "admin-uid"}
+    )
+    assert uploaded["status"] == "approved"
+    assert uploaded["warnings"] == ["Page 2 table extraction failed"]
+    assert connection.updates[-1][2] == "approved"
 
 
 def test_pipeline_keeps_critical_failures_unavailable(monkeypatch):

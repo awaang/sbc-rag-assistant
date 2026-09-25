@@ -39,7 +39,7 @@ def drain_pending_documents(wait_for_lock: bool = True) -> None:
                 connection.commit()
                 while True:
                     document = connection.execute(
-                        """SELECT d.document_id, d.pdf_bytes, d.plan_id,
+                        """SELECT d.document_id, d.pdf_bytes, d.plan_id, d.uploaded_by_firebase_uid,
                                   d.ingestion_attempts, p.plan_name, p.insurer
                            FROM documents d LEFT JOIN plans p USING (plan_id)
                            WHERE d.ingestion_queued_at IS NOT NULL
@@ -68,7 +68,7 @@ def drain_pending_documents(wait_for_lock: bool = True) -> None:
                         from app.pipeline import process_document
 
                         result = process_document(connection, dict(document))
-                        if result["status"] not in {"ready", "ready_with_warnings", "failed"}:
+                        if result["status"] not in {"approved", "ready", "ready_with_warnings", "failed"}:
                             raise RuntimeError(f"Unexpected ingestion status: {result['status']}")
                     except Exception as exc:
                         connection.rollback()

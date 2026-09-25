@@ -24,8 +24,11 @@ def _save(connection, document_id: int, stages: dict, warnings: list[str],
           status: str, error: str | None = None) -> None:
     connection.execute(
         """UPDATE documents SET processing_stages = %s, processing_warnings = %s,
-           review_status = %s, ingestion_error = %s WHERE document_id = %s""",
-        (Jsonb(stages), Jsonb(warnings), status, error, document_id),
+           review_status = %s, ingestion_error = %s,
+           reviewed_by_firebase_uid = CASE WHEN %s = 'approved' THEN uploaded_by_firebase_uid ELSE reviewed_by_firebase_uid END,
+           reviewed_at = CASE WHEN %s = 'approved' THEN now() ELSE reviewed_at END
+           WHERE document_id = %s""",
+        (Jsonb(stages), Jsonb(warnings), status, error, status, status, document_id),
     )
     connection.commit()
 
@@ -90,6 +93,7 @@ def process_document(connection, document: dict) -> dict:
     except Exception as exc:
         error = f"Benefit extraction failed: {type(exc).__name__}: {exc}"[:2000]
         stages["benefit_extraction"] = "failed"
+        connection.rollback()
         _save(connection, document_id, stages, warnings, "failed", error)
         return {"document_id": document_id, "status": "failed", "error": error}
     try:
@@ -116,13 +120,15 @@ def process_document(connection, document: dict) -> dict:
             vectors = np.asarray(row["vectors"], dtype="float32")
             if vectors.ndim != 2 or vectors.shape[1] != dimension or not np.isfinite(vectors).all() or np.any(np.linalg.norm(vectors, axis=1) == 0):
                 raise ValueError("Stored embeddings contain invalid vectors.")
-        status = readiness_status(stages, warnings, by_strategy)
+        readiness = readiness_status(stages, warnings, by_strategy)
+        status = "approved" if document.get("uploaded_by_firebase_uid") else readiness
         _save(connection, document_id, stages, warnings, status)
         return {"document_id": document_id, "status": status, "stages": stages,
                 "warnings": warnings, "candidates": len(candidates)}
     except Exception as exc:
         error = f"Embedding failed: {type(exc).__name__}: {exc}"[:2000]
         stages["embedding"] = "failed"
+        connection.rollback()
         _save(connection, document_id, stages, warnings, "failed", error)
         return {"document_id": document_id, "status": "failed", "error": error, "stages": stages}
 
@@ -138,7 +144,8 @@ def main() -> None:
         connection.execute("SELECT pg_advisory_lock(%s, %s)", INGESTION_LOCK_KEY)
         connection.commit()
         rows = connection.execute(
-            """SELECT d.document_id, d.pdf_bytes, d.plan_id, p.plan_name, p.insurer
+            """SELECT d.document_id, d.pdf_bytes, d.plan_id, d.uploaded_by_firebase_uid,
+                      p.plan_name, p.insurer
                FROM documents d LEFT JOIN plans p USING (plan_id)
                WHERE (%s::bigint IS NULL AND d.review_status = 'uploaded')
                   OR (%s::bigint = d.document_id AND d.review_status IN

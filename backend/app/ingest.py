@@ -94,6 +94,7 @@ def ingest_document(connection: psycopg.Connection, document: dict) -> dict:
                 "error": critical}
     except Exception as exc:
         message = f"{type(exc).__name__}: {exc}"[:2000]
+        connection.rollback()
         connection.execute(
             """UPDATE documents SET review_status = 'failed', ingestion_error = %s,
                processing_stages = %s WHERE document_id = %s""",

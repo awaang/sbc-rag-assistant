@@ -41,13 +41,14 @@ const pageLabels: Record<Page, string> = {
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
-function Icon({ name, className = "" }: { name: "spark" | "send" | "shield" | "book" | "profile" | "logout"; className?: string }) {
+function Icon({ name, className = "" }: { name: "spark" | "send" | "shield" | "book" | "profile" | "logout" | "trash"; className?: string }) {
   const common = { className, width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true as const };
   if (name === "spark") return <svg {...common}><path d="m12 3 1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2L12 3Z"/><path d="m19 15 .9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15Z"/></svg>;
   if (name === "send") return <svg {...common}><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>;
   if (name === "shield") return <svg {...common}><path d="M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11Z"/><path d="m9 12 2 2 4-4"/></svg>;
   if (name === "book") return <svg {...common}><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg>;
   if (name === "profile") return <svg {...common}><circle cx="12" cy="8" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/></svg>;
+  if (name === "trash") return <svg {...common}><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>;
   return <svg {...common}><path d="M10 17l5-5-5-5"/><path d="M15 12H3"/><path d="M12 3h6a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3h-6"/></svg>;
 }
 
@@ -251,8 +252,8 @@ type ManagedDocument = {
 type SourceDocument = { document_id: number; original_filename: string; plan_name: string | null; parsed_pages: number; corpus_status: string };
 
 const BENEFIT_REVIEW_GROUPS = [
-  { key: "not_verified", label: "Not verified", verified: false, tone: "border-amber-300 bg-amber-50 text-amber-950", open: true },
-  { key: "verified", label: "Verified", verified: true, tone: "border-emerald-300 bg-emerald-50 text-emerald-950", open: false },
+  { key: "candidates", label: "Extracted candidates", verified: false, tone: "border-amber-300 bg-amber-50 text-amber-950", open: true },
+  { key: "verified", label: "Previously verified", verified: true, tone: "border-emerald-300 bg-emerald-50 text-emerald-950", open: false },
 ];
 const BENEFIT_STATUS_BADGES: Record<string, { label: string; tone: string }> = {
   pending_review: { label: "Pending review", tone: "border-amber-300 bg-amber-50 text-amber-900" },
@@ -262,7 +263,7 @@ const BENEFIT_STATUS_BADGES: Record<string, { label: string; tone: string }> = {
   verified: { label: "Verified", tone: "border-emerald-300 bg-emerald-50 text-emerald-900" },
 };
 const BENEFIT_STATUS_GUIDE = [
-  { status: "pending_review", description: "Automatically extracted. It can support an answer when its value, context, page, and section are unambiguous; verification is optional." },
+  { status: "pending_review", description: "Automatically extracted. It can support an answer when its value, context, page, and section are unambiguous." },
   { status: "missing", description: "Review found no usable value for this benefit in the source. Don’t fill the gap by guessing." },
   { status: "ambiguous", description: "The value or its context is unclear. Extraction may flag multiple distinct values on a source line; check the PDF to determine what each amount means." },
   { status: "conflicting", description: "Evidence or candidate records disagree about the value. Reconcile the source evidence before relying on it." },
@@ -292,7 +293,7 @@ function BenefitsReviewPage({ user }: { user: User }) {
   useEffect(() => { void refresh(); }, [user.uid]);
   async function extract(documentId: number) {
     setBusy(true); setMessage(""); setError("");
-    try { const result = await api("/api/admin/benefits/extract", { method: "POST", body: JSON.stringify({ document_id: documentId }) }); setMessage(`Created ${result.candidates_created} candidate records. Every value requires review.`); await refresh(); }
+    try { const result = await api("/api/admin/benefits/extract", { method: "POST", body: JSON.stringify({ document_id: documentId }) }); setMessage(`Created ${result.candidates_created} candidate records. Usable values can answer questions automatically.`); await refresh(); }
     catch (e) { setError(e instanceof Error ? e.message : "Extraction failed."); }
     finally { setBusy(false); }
   }
@@ -316,7 +317,7 @@ function BenefitsReviewPage({ user }: { user: User }) {
     finally { setBusy(false); }
   }
   return <div className="content-page">
-    <PageHeading eyebrow="ADMIN WORKSPACE" title="Benefit extraction review" description="Inspect detected sections and correct or verify values when needed. Automatically extracted values can support cited answers." />
+    <PageHeading eyebrow="ADMIN WORKSPACE" title="Benefit extraction review" description="Inspect detected sections and correct values when needed. Automatically extracted values can support cited answers." />
     {error && <p role="alert" className="chat-error">{error}</p>}{message && <p role="status">{message}</p>}
     <Card><CardContent className="p-5"><h2 className="font-semibold">Parsed documents</h2><p className="text-sm text-muted-foreground">Extraction requires Phase 2 parsed pages and a linked plan.</p>
       {documents.map((doc) => <div className="flex flex-wrap items-center justify-between gap-3 border-b py-3" key={doc.document_id}><span>{doc.plan_name || doc.original_filename} · {doc.parsed_pages} pages · {doc.corpus_status}</span><Button disabled={busy || !doc.parsed_pages} onClick={() => void extract(doc.document_id)}>Extract candidates</Button></div>)}
@@ -341,7 +342,7 @@ function BenefitsReviewPage({ user }: { user: User }) {
             <span className="flex items-center gap-1.5"><svg aria-hidden="true" className="benefit-review-chevron h-4 w-4 shrink-0" viewBox="0 0 20 20" fill="none"><path d="m5.5 7.5 4.5 4.5 4.5-4.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>{group.label}</span>
             <span className="rounded-full bg-white/70 px-2.5 py-0.5 text-sm tabular-nums">{groupRows.length}</span>
           </summary>
-          {!group.verified && <p className="border-t border-current/15 px-4 pb-2 text-xs">Pending and reviewed outcomes are together here; each benefit keeps its own status.</p>}
+          {!group.verified && <p className="border-t border-current/15 px-4 pb-2 text-xs">Usable candidates can answer questions without an approval step; each benefit keeps its own status.</p>}
           <div className="space-y-3 border-t border-current/15 p-3">
             {groupRows.map((row) => {
               const badge = BENEFIT_STATUS_BADGES[row.verification_status] || { label: "Status unavailable", tone: "border-slate-300 bg-slate-100 text-slate-800" };
@@ -354,9 +355,6 @@ function BenefitsReviewPage({ user }: { user: User }) {
                 <div className="flex flex-wrap items-end gap-2">
                   <label className="field-label">Review outcome<select className="text-input" name="review_status" defaultValue={row.verification_status === "verified" ? "pending_review" : row.verification_status}><option value="pending_review">Corrected candidate</option><option value="missing">Missing</option><option value="ambiguous">Ambiguous</option><option value="conflicting">Conflicting</option></select></label>
                   <Button type="button" variant="outline" disabled={busy} onClick={(event) => { const form = event.currentTarget.form; if (form) void save(row, form, (new FormData(form).get("review_status") || "pending_review") as BenefitVerificationStatus); }}>Save correction</Button>
-                  {row.verification_status === "verified"
-                    ? <Button type="button" variant="outline" className="border-slate-400" disabled={busy} onClick={(event) => { const form = event.currentTarget.form; if (form) void save(row, form, "pending_review"); }}>× Unverify</Button>
-                    : <Button type="button" className="border-emerald-700 bg-emerald-700 text-white hover:bg-emerald-800 hover:text-white" disabled={busy} onClick={(event) => { const form = event.currentTarget.form; if (form) void save(row, form, "verified"); }}>✓ Verify</Button>}
                 </div>
               </form>
               </CardContent></Card>;
@@ -397,7 +395,7 @@ function AdminDocumentsSection({ user, onDocumentsUpdated }: { user: User; onDoc
   }, [hasPendingIngestion, user.uid]);
   async function upload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const formElement = event.currentTarget; setBusy(true); setError(""); setNotice("");
-    try { const form = new FormData(formElement); if (!form.get("plan_year")) form.delete("plan_year"); await api("/api/admin/documents", { method: "POST", body: form }); formElement.reset(); setNotice("PDF uploaded as an unverified candidate. Processing starts automatically."); await refresh(); }
+    try { const form = new FormData(formElement); if (!form.get("plan_year")) form.delete("plan_year"); await api("/api/admin/documents", { method: "POST", body: form }); formElement.reset(); setNotice("PDF uploaded. You can ask questions when processing finishes."); await refresh(); }
     catch (e) { setError(e instanceof Error ? e.message : "Upload failed."); }
     finally { setBusy(false); }
   }
@@ -406,20 +404,21 @@ function AdminDocumentsSection({ user, onDocumentsUpdated }: { user: User; onDoc
     try { setInspection(await api(`/api/admin/documents/${documentId}`)); }
     catch (e) { setError(e instanceof Error ? e.message : "Could not inspect document."); }
   }
-  async function review(documentId: number, review_status: "approved" | "rejected") {
-    setBusy(true); setError(""); setNotice("");
-    try { await api(`/api/admin/documents/${documentId}/review`, { method: "PATCH", body: JSON.stringify({ review_status }) }); setNotice(`Document ${review_status}. Corpus eligibility remains ${documents.find((item) => item.document_id === documentId)?.corpus_status || "candidate"}.`); await refresh(); await inspect(documentId); }
-    catch (e) { setError(e instanceof Error ? e.message : "Could not save document review."); }
-    finally { setBusy(false); }
-  }
   async function retry(documentId: number) {
     setBusy(true); setError(""); setNotice("");
     try { await api(`/api/admin/documents/${documentId}/retry`, { method: "POST" }); setNotice("Document queued for automatic processing."); await refresh(); }
     catch (e) { setError(e instanceof Error ? e.message : "Could not queue document."); }
     finally { setBusy(false); }
   }
+  async function remove(doc: ManagedDocument) {
+    if (!window.confirm(`Permanently delete "${doc.plan_name || doc.original_filename}"? Its pages, chunks, embeddings, and benefit records will also be removed.`)) return;
+    setBusy(true); setError(""); setNotice("");
+    try { await api(`/api/admin/documents/${doc.document_id}`, { method: "DELETE" }); if (inspection?.document.document_id === doc.document_id) setInspection(null); setNotice("Document deleted."); await refresh(); }
+    catch (e) { setError(e instanceof Error ? e.message : "Could not delete document."); }
+    finally { setBusy(false); }
+  }
   return <section className="mt-12" aria-labelledby="admin-documents-title">
-    <div className="page-heading"><p className="eyebrow">ADMIN WORKSPACE</p><h2 id="admin-documents-title">Source documents</h2><p>Upload PDFs and inspect automatic processing, readiness, warnings, pages, and chunks. Verification is optional and does not establish SBC eligibility.</p></div>
+    <div className="page-heading"><p className="eyebrow">ADMIN WORKSPACE</p><h2 id="admin-documents-title">Source documents</h2><p>Upload PDFs and inspect processing, warnings, pages, and chunks. Completed admin uploads are available for questions automatically.</p></div>
     {error && <p role="alert" className="chat-error">{error}</p>}{notice && <p role="status">{notice}</p>}
     <Card id="admin-document-upload"><CardContent className="p-5"><h3 className="font-semibold">Upload a plan PDF</h3><p className="mb-4 text-sm text-muted-foreground">Uploads are stored in Neon and processed automatically. Maximum file size: 15 MB.</p>
       <form onSubmit={upload} className="grid gap-3 sm:grid-cols-2">
@@ -430,11 +429,11 @@ function AdminDocumentsSection({ user, onDocumentsUpdated }: { user: User; onDoc
         <label className="field-label">Coverage type<select className="text-input" name="coverage_type"><option value="medical">Medical</option><option value="dental">Dental</option><option value="vision">Vision</option><option value="unknown">Unknown</option></select></label>
         <label className="field-label">Plan year<input className="text-input" name="plan_year" type="number" min="1900" max="2200" /></label>
         <label className="field-label sm:col-span-2">Public source URL (optional for candidate processing)<input className="text-input" name="source_url" type="url" maxLength={2000} /></label>
-        <div><Button type="submit" disabled={busy}>{busy ? "Uploading…" : "Upload candidate PDF"}</Button></div>
+        <div><Button type="submit" disabled={busy}>{busy ? "Uploading…" : "Upload PDF"}</Button></div>
       </form>
     </CardContent></Card>
     <Card className="mt-5"><CardContent className="p-5"><h3 className="font-semibold">Processing status</h3><p className="mb-3 text-sm text-muted-foreground">Ready documents can answer questions. Warnings affect only the evidence they describe. Failed documents need reprocessing.</p>
-      {documents.map((doc) => <div className="border-b py-4" key={doc.document_id}><div className="flex flex-wrap items-start justify-between gap-3"><div><strong>{doc.plan_name || doc.original_filename}</strong><p className="text-sm text-muted-foreground">{doc.insurer} · {doc.plan_type?.toUpperCase()} · {doc.coverage_type} {doc.plan_year || ""} · {doc.parsed_pages} pages · {doc.review_status} · {doc.corpus_status}</p><p className="mt-1 text-xs">Stages: {Object.entries(doc.processing_stages || {}).map(([stage, state]) => `${stage}: ${state}`).join(" · ") || (doc.ingestion_queued_at ? "queued" : "not started")}</p>{doc.processing_warnings?.map((warning, index) => <p key={index} className="mt-1 text-sm text-amber-800">Warning: {warning}</p>)}{doc.ingestion_error && <p className="mt-1 text-sm text-red-800">Failure: {doc.ingestion_error}</p>}</div><div className="flex gap-2"><Button variant="outline" onClick={() => void inspect(doc.document_id)}>Inspect</Button>{["failed", "needs_review"].includes(doc.review_status) && !doc.ingestion_queued_at && <Button variant="outline" disabled={busy} onClick={() => void retry(doc.document_id)}>Retry</Button>}{["ready", "ready_with_warnings", "approved"].includes(doc.review_status) && <Button variant="outline" disabled={busy} onClick={() => void review(doc.document_id, "rejected")}>Reject</Button>}{["ready", "ready_with_warnings", "rejected"].includes(doc.review_status) && doc.processing_stages?.embedding === "completed" && <Button disabled={busy} onClick={() => void review(doc.document_id, "approved")}>Verify</Button>}</div></div></div>)}
+      {documents.map((doc) => <div className="border-b py-4" key={doc.document_id}><div className="flex flex-wrap items-start justify-between gap-3"><div><strong>{doc.plan_name || doc.original_filename}</strong><p className="text-sm text-muted-foreground">{doc.insurer} · {doc.plan_type?.toUpperCase()} · {doc.coverage_type} {doc.plan_year || ""} · {doc.parsed_pages} pages</p><p className="mt-1 text-xs">Stages: {Object.entries(doc.processing_stages || {}).map(([stage, state]) => `${stage}: ${state}`).join(" · ") || (doc.ingestion_queued_at ? "queued" : "not started")}</p>{doc.processing_warnings?.map((warning, index) => <p key={index} className="mt-1 text-sm text-amber-800">Warning: {warning}</p>)}{doc.ingestion_error && <p className="mt-1 text-sm text-red-800">Failure: {doc.ingestion_error}</p>}</div><div className="flex gap-2"><Button variant="outline" onClick={() => void inspect(doc.document_id)}>Inspect</Button>{["failed", "needs_review"].includes(doc.review_status) && !doc.ingestion_queued_at && <Button variant="outline" disabled={busy} onClick={() => void retry(doc.document_id)}>Retry</Button>}<Button variant="outline" size="icon" disabled={busy || Boolean(doc.ingestion_queued_at) || doc.review_status === "processing"} onClick={() => void remove(doc)} aria-label={`Delete ${doc.plan_name || doc.original_filename}`} title="Delete document"><Icon name="trash" /></Button></div></div></div>)}
       {!documents.length && <p className="py-4 text-sm text-muted-foreground">No documents uploaded.</p>}
     </CardContent></Card>
     {inspection && <Card className="mt-5"><CardContent className="p-5"><h3 className="font-semibold">Inspection: {inspection.document.original_filename}</h3><p className="mb-4 text-xs text-muted-foreground">{inspection.document.plan_name} · {inspection.document.corpus_status} · {inspection.document.review_status}</p><p className="text-xs">Stages: {Object.entries(inspection.document.processing_stages || {}).map(([stage, state]) => `${stage}: ${state}`).join(" · ") || "not started"}</p>{inspection.document.processing_warnings?.map((warning: string, index: number) => <p key={index} className="text-sm text-amber-800">Warning: {warning}</p>)}{inspection.document.ingestion_error && <p className="text-sm text-red-800">Failure: {inspection.document.ingestion_error}</p>}{inspection.pages.map((page: any) => <details className="border-t py-3" key={page.page_id}><summary className="cursor-pointer font-medium">Page {page.page_number} · {page.section_heading || "Section not detected"} · {page.parse_status}</summary><pre className="mt-2 whitespace-pre-wrap text-xs">{page.extracted_text || "No text extracted"}{page.tables_json?.length ? `\n\nTABLES\n${JSON.stringify(page.tables_json, null, 2)}` : ""}</pre></details>)}<details className="border-t py-3"><summary className="cursor-pointer font-medium">Chunks ({inspection.chunks.length})</summary>{inspection.chunks.map((chunk: any) => <details className="ml-3 border-t py-2" key={chunk.chunk_id}><summary>{chunk.chunk_strategy} · pages {chunk.page_start}–{chunk.page_end}</summary><pre className="whitespace-pre-wrap text-xs">{chunk.chunk_text}\n\n{JSON.stringify(chunk.provenance, null, 2)}</pre></details>)}</details></CardContent></Card>}
