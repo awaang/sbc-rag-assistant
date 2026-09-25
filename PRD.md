@@ -33,7 +33,7 @@ Users must authenticate before accessing the question-answering application. Fir
 - Document implementation decisions, chunking tradeoffs, retrieval results, extraction accuracy, and what would change with a real budget.
 - **Initial implementation:** use deterministic answer formatting for supported facts, comparisons, citations, clarification, and abstention. Do not integrate or call Gemini in the initial implementation.
 - **Later phase:** Gemini may be added only after the deterministic evidence-grounded answer path is implemented and evaluated, and only as an optional final phrasing step over already validated evidence. It must not select facts, fill gaps, alter citations, or override abstention. Its availability/free-tier status is not a prerequisite for the initial demo.
-- Provide actual admin PDF uploads and review controls. Uploads are stored durably; one local pipeline command parses, chunks, extracts benefits, embeds chunks, and assesses readiness. Routine queryability does not require document approval or per-benefit confirmation.
+- Provide actual admin PDF uploads and review controls. Uploads are stored durably and automatically trigger parsing, chunking, benefit extraction, embedding, and readiness assessment in the FastAPI service. Interrupted queued work resumes after a service restart; repeated interruptions stop with a visible failure and an admin Retry action. The local pipeline command remains available for maintenance. Routine queryability does not require document approval or per-benefit confirmation.
 - Target a fully free, no-credit-card local/deployed demo using Firebase Spark, Neon Free, and Render Free, subject to current provider limits and account verification. Free-tier cold starts and quotas are acceptable limitations and must be documented.
 - Show basic evidence-path/citation diagnostics to all users and detailed retrieval, parsing, extraction, and ingestion diagnostics to admins.
 
@@ -94,7 +94,7 @@ Users must authenticate before accessing the question-answering application. Fir
 7. **User interface**
    - Provide a simple interface for authentication, question submission, answers or abstentions, and citations. Visual polish and additional UI features are out of scope.
    - Present a multi-turn, ChatGPT-style conversation in the chat page. Keep the active conversation transcript in browser memory only; clear it when the user starts a new chat, signs out, or reloads/closes the page. Do not persist ordinary chat messages to the backend or browser storage.
-   - Provide real admin PDF upload, per-stage processing status and warnings, parsed evidence/extraction review, and optional verification controls. The local pipeline runs parsing and embedding on the maintainer's machine.
+   - Provide real admin PDF upload, automatic processing, per-stage status and warnings, parsed evidence/extraction review, and optional verification controls. The FastAPI service runs parsing and embedding after upload; local maintenance commands use the same pipeline.
    - Show basic diagnostics to all users and advanced diagnostics only to admins.
    - Provide an admin-only evaluation playground to select BM25 or semantic search and fixed-size or semantic/section-aware chunks. Detailed rank and score traces remain admin-only.
 
@@ -128,6 +128,6 @@ Users must authenticate before accessing the question-answering application. Fir
 - [ ] Initial answer flow is complete and evaluated without Gemini; any later Gemini integration is a separate phase and cannot weaken evidence, citation, or abstention behavior.
 - [ ] The README explains chunking decisions, BM25 versus semantic retrieval results, extraction accuracy, and what would be done differently with a real budget.
 - [ ] Unauthenticated requests are rejected by the application server; authenticated users can access the question-answering flow.
-- [ ] Admin uploads are durable; local pipeline readiness and warning handling work end to end without mandatory approval, and non-admin users cannot invoke admin operations.
+- [ ] Admin uploads are durable and start processing automatically; readiness, warning handling, restart recovery, and Retry work end to end without mandatory approval, and non-admin users cannot invoke admin operations.
 - [ ] Basic diagnostics are available to all users and advanced diagnostics only to admins.
 - [ ] The application runs locally and is deployed on no-card free tiers with cold-start/quota limitations documented.

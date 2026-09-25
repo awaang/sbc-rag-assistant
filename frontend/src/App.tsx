@@ -243,6 +243,7 @@ type BenefitVerificationStatus = "pending_review" | "verified" | "missing" | "am
 type ManagedDocument = {
   document_id: number; original_filename: string; source_url: string | null;
   corpus_status: string; review_status: string; ingestion_error: string | null;
+  ingestion_queued_at: string | null; ingestion_attempts: number;
   processing_stages: Record<string, string>; processing_warnings: string[];
   plan_name: string | null; insurer: string | null; plan_type: string;
   coverage_type: string; plan_year: number | null; parsed_pages: number;
@@ -388,9 +389,15 @@ function AdminDocumentsSection({ user, onDocumentsUpdated }: { user: User; onDoc
     catch (e) { setError(e instanceof Error ? e.message : "Could not load documents."); }
   }
   useEffect(() => { void refresh(); }, [user.uid]);
+  const hasPendingIngestion = documents.some((document) => Boolean(document.ingestion_queued_at));
+  useEffect(() => {
+    if (!hasPendingIngestion) return;
+    const timer = window.setInterval(() => { void refresh(); }, 4000);
+    return () => window.clearInterval(timer);
+  }, [hasPendingIngestion, user.uid]);
   async function upload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const formElement = event.currentTarget; setBusy(true); setError(""); setNotice("");
-    try { const form = new FormData(formElement); if (!form.get("plan_year")) form.delete("plan_year"); await api("/api/admin/documents", { method: "POST", body: form }); formElement.reset(); setNotice("PDF uploaded as an unverified candidate. Run python -m app.pipeline locally to process it."); await refresh(); }
+    try { const form = new FormData(formElement); if (!form.get("plan_year")) form.delete("plan_year"); await api("/api/admin/documents", { method: "POST", body: form }); formElement.reset(); setNotice("PDF uploaded as an unverified candidate. Processing starts automatically."); await refresh(); }
     catch (e) { setError(e instanceof Error ? e.message : "Upload failed."); }
     finally { setBusy(false); }
   }
@@ -407,14 +414,14 @@ function AdminDocumentsSection({ user, onDocumentsUpdated }: { user: User; onDoc
   }
   async function retry(documentId: number) {
     setBusy(true); setError(""); setNotice("");
-    try { await api(`/api/admin/documents/${documentId}/retry`, { method: "POST" }); setNotice("Document returned to the upload queue. Run python -m app.pipeline again."); await refresh(); }
+    try { await api(`/api/admin/documents/${documentId}/retry`, { method: "POST" }); setNotice("Document queued for automatic processing."); await refresh(); }
     catch (e) { setError(e instanceof Error ? e.message : "Could not queue document."); }
     finally { setBusy(false); }
   }
   return <section className="mt-12" aria-labelledby="admin-documents-title">
-    <div className="page-heading"><p className="eyebrow">ADMIN WORKSPACE</p><h2 id="admin-documents-title">Source documents</h2><p>Upload PDFs, run the local pipeline, and inspect readiness, stages, warnings, pages, and chunks. Verification is optional and does not establish SBC eligibility.</p></div>
+    <div className="page-heading"><p className="eyebrow">ADMIN WORKSPACE</p><h2 id="admin-documents-title">Source documents</h2><p>Upload PDFs and inspect automatic processing, readiness, warnings, pages, and chunks. Verification is optional and does not establish SBC eligibility.</p></div>
     {error && <p role="alert" className="chat-error">{error}</p>}{notice && <p role="status">{notice}</p>}
-    <Card id="admin-document-upload"><CardContent className="p-5"><h3 className="font-semibold">Upload a plan PDF</h3><p className="mb-4 text-sm text-muted-foreground">Uploads are stored in Neon. Run <code>python -m app.pipeline</code> locally to process them. Maximum file size: 15 MB.</p>
+    <Card id="admin-document-upload"><CardContent className="p-5"><h3 className="font-semibold">Upload a plan PDF</h3><p className="mb-4 text-sm text-muted-foreground">Uploads are stored in Neon and processed automatically. Maximum file size: 15 MB.</p>
       <form onSubmit={upload} className="grid gap-3 sm:grid-cols-2">
         <label className="field-label">PDF file<input className="text-input" type="file" name="file" accept="application/pdf,.pdf" required /></label>
         <label className="field-label">Insurer<input className="text-input" name="insurer" maxLength={120} required /></label>
@@ -427,7 +434,7 @@ function AdminDocumentsSection({ user, onDocumentsUpdated }: { user: User; onDoc
       </form>
     </CardContent></Card>
     <Card className="mt-5"><CardContent className="p-5"><h3 className="font-semibold">Processing status</h3><p className="mb-3 text-sm text-muted-foreground">Ready documents can answer questions. Warnings affect only the evidence they describe. Failed documents need reprocessing.</p>
-      {documents.map((doc) => <div className="border-b py-4" key={doc.document_id}><div className="flex flex-wrap items-start justify-between gap-3"><div><strong>{doc.plan_name || doc.original_filename}</strong><p className="text-sm text-muted-foreground">{doc.insurer} · {doc.plan_type?.toUpperCase()} · {doc.coverage_type} {doc.plan_year || ""} · {doc.parsed_pages} pages · {doc.review_status} · {doc.corpus_status}</p><p className="mt-1 text-xs">Stages: {Object.entries(doc.processing_stages || {}).map(([stage, state]) => `${stage}: ${state}`).join(" · ") || "not started"}</p>{doc.processing_warnings?.map((warning, index) => <p key={index} className="mt-1 text-sm text-amber-800">Warning: {warning}</p>)}{doc.ingestion_error && <p className="mt-1 text-sm text-red-800">Failure: {doc.ingestion_error}</p>}</div><div className="flex gap-2"><Button variant="outline" onClick={() => void inspect(doc.document_id)}>Inspect</Button>{["failed", "needs_review"].includes(doc.review_status) && <Button variant="outline" disabled={busy} onClick={() => void retry(doc.document_id)}>Retry</Button>}{["ready", "ready_with_warnings", "approved"].includes(doc.review_status) && <Button variant="outline" disabled={busy} onClick={() => void review(doc.document_id, "rejected")}>Reject</Button>}{["ready", "ready_with_warnings", "rejected"].includes(doc.review_status) && doc.processing_stages?.embedding === "completed" && <Button disabled={busy} onClick={() => void review(doc.document_id, "approved")}>Verify</Button>}</div></div></div>)}
+      {documents.map((doc) => <div className="border-b py-4" key={doc.document_id}><div className="flex flex-wrap items-start justify-between gap-3"><div><strong>{doc.plan_name || doc.original_filename}</strong><p className="text-sm text-muted-foreground">{doc.insurer} · {doc.plan_type?.toUpperCase()} · {doc.coverage_type} {doc.plan_year || ""} · {doc.parsed_pages} pages · {doc.review_status} · {doc.corpus_status}</p><p className="mt-1 text-xs">Stages: {Object.entries(doc.processing_stages || {}).map(([stage, state]) => `${stage}: ${state}`).join(" · ") || (doc.ingestion_queued_at ? "queued" : "not started")}</p>{doc.processing_warnings?.map((warning, index) => <p key={index} className="mt-1 text-sm text-amber-800">Warning: {warning}</p>)}{doc.ingestion_error && <p className="mt-1 text-sm text-red-800">Failure: {doc.ingestion_error}</p>}</div><div className="flex gap-2"><Button variant="outline" onClick={() => void inspect(doc.document_id)}>Inspect</Button>{["failed", "needs_review"].includes(doc.review_status) && !doc.ingestion_queued_at && <Button variant="outline" disabled={busy} onClick={() => void retry(doc.document_id)}>Retry</Button>}{["ready", "ready_with_warnings", "approved"].includes(doc.review_status) && <Button variant="outline" disabled={busy} onClick={() => void review(doc.document_id, "rejected")}>Reject</Button>}{["ready", "ready_with_warnings", "rejected"].includes(doc.review_status) && doc.processing_stages?.embedding === "completed" && <Button disabled={busy} onClick={() => void review(doc.document_id, "approved")}>Verify</Button>}</div></div></div>)}
       {!documents.length && <p className="py-4 text-sm text-muted-foreground">No documents uploaded.</p>}
     </CardContent></Card>
     {inspection && <Card className="mt-5"><CardContent className="p-5"><h3 className="font-semibold">Inspection: {inspection.document.original_filename}</h3><p className="mb-4 text-xs text-muted-foreground">{inspection.document.plan_name} · {inspection.document.corpus_status} · {inspection.document.review_status}</p><p className="text-xs">Stages: {Object.entries(inspection.document.processing_stages || {}).map(([stage, state]) => `${stage}: ${state}`).join(" · ") || "not started"}</p>{inspection.document.processing_warnings?.map((warning: string, index: number) => <p key={index} className="text-sm text-amber-800">Warning: {warning}</p>)}{inspection.document.ingestion_error && <p className="text-sm text-red-800">Failure: {inspection.document.ingestion_error}</p>}{inspection.pages.map((page: any) => <details className="border-t py-3" key={page.page_id}><summary className="cursor-pointer font-medium">Page {page.page_number} · {page.section_heading || "Section not detected"} · {page.parse_status}</summary><pre className="mt-2 whitespace-pre-wrap text-xs">{page.extracted_text || "No text extracted"}{page.tables_json?.length ? `\n\nTABLES\n${JSON.stringify(page.tables_json, null, 2)}` : ""}</pre></details>)}<details className="border-t py-3"><summary className="cursor-pointer font-medium">Chunks ({inspection.chunks.length})</summary>{inspection.chunks.map((chunk: any) => <details className="ml-3 border-t py-2" key={chunk.chunk_id}><summary>{chunk.chunk_strategy} · pages {chunk.page_start}–{chunk.page_end}</summary><pre className="whitespace-pre-wrap text-xs">{chunk.chunk_text}\n\n{JSON.stringify(chunk.provenance, null, 2)}</pre></details>)}</details></CardContent></Card>}
@@ -551,8 +558,8 @@ function PlansPage({ user, isAdmin }: { user: User; isAdmin: boolean }) {
       )}</div> : <Card><CardContent className="empty-state">
         <div className="empty-mark"><Icon name="book" /></div>
         <h2>No ready plans yet</h2>
-        <p>Plan details will appear here after source documents complete local processing.</p>
-        {isAdmin && <div className="admin-notice"><strong>Admin workspace</strong><span>Upload a candidate PDF below, then run the local pipeline.</span></div>}
+        <p>Plan details will appear here after source documents finish processing.</p>
+        {isAdmin && <div className="admin-notice"><strong>Admin workspace</strong><span>Upload a candidate PDF below to begin processing.</span></div>}
       </CardContent></Card>}
       {isAdmin && <AdminDocumentsSection user={user} onDocumentsUpdated={() => setRefreshVersion((version) => version + 1)} />}
     </div>

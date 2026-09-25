@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from app.auto_ingestion import INGESTION_LOCK_KEY
 from app.ingestion import _is_heading, build_chunks, parse_pdf
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
@@ -111,6 +112,8 @@ def main() -> None:
     if not database_url:
         raise SystemExit("DATABASE_URL is required in the repository-root .env file.")
     with psycopg.connect(database_url, row_factory=dict_row) as connection:
+        connection.execute("SELECT pg_advisory_lock(%s, %s)", INGESTION_LOCK_KEY)
+        connection.commit()
         if args.reprocess_id is None:
             pending = connection.execute(
                 """SELECT document_id, pdf_bytes FROM documents WHERE review_status = 'uploaded'
@@ -139,6 +142,8 @@ def embed_main() -> None:
     if not database_url:
         raise SystemExit("DATABASE_URL is required in the repository-root .env file.")
     with psycopg.connect(database_url, row_factory=dict_row) as connection:
+        connection.execute("SELECT pg_advisory_lock(%s, %s)", INGESTION_LOCK_KEY)
+        connection.commit()
         print(make_document_embeddings(connection))
 
 

@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from app.auto_ingestion import INGESTION_LOCK_KEY
 from app.benefits import extract_candidates
 from app.ingest import ingest_document
 from app.retrieval import MODEL_NAME, MODEL_VERSION, make_document_embeddings, model_dimension, model_fingerprint
@@ -92,7 +93,10 @@ def process_document(connection, document: dict) -> dict:
         _save(connection, document_id, stages, warnings, "failed", error)
         return {"document_id": document_id, "status": "failed", "error": error}
     try:
-        make_document_embeddings(connection, document_id=document_id)
+        batch_size = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
+        if batch_size < 1:
+            raise ValueError("EMBEDDING_BATCH_SIZE must be positive.")
+        make_document_embeddings(connection, batch_size=batch_size, document_id=document_id)
         fingerprint = model_fingerprint()
         counts = connection.execute(
             """SELECT c.chunk_strategy, count(*) AS total,
@@ -131,6 +135,8 @@ def main() -> None:
     if not database_url:
         raise SystemExit("DATABASE_URL is required in the repository-root .env file.")
     with psycopg.connect(database_url, row_factory=dict_row) as connection:
+        connection.execute("SELECT pg_advisory_lock(%s, %s)", INGESTION_LOCK_KEY)
+        connection.commit()
         rows = connection.execute(
             """SELECT d.document_id, d.pdf_bytes, d.plan_id, p.plan_name, p.insurer
                FROM documents d LEFT JOIN plans p USING (plan_id)

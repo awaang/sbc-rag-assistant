@@ -5,7 +5,7 @@ services:
     plan: free
     rootDir: backend
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: python -m app.db.migrate && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
     envVars:
       - key: FIREBASE_PROJECT_ID
@@ -16,6 +16,12 @@ services:
         sync: false
       - key: FRONTEND_ORIGIN
         sync: false
+      - key: EMBEDDING_BATCH_SIZE
+        value: "1"
+      - key: OMP_NUM_THREADS
+        value: "1"
+      - key: OPENBLAS_NUM_THREADS
+        value: "1"
 
   - type: web
     name: sbc-assistant-frontend

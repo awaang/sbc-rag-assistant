@@ -35,7 +35,7 @@ def model_fingerprint() -> str:
         digest.update(key.encode())
         digest.update(str(tuple(value.shape)).encode())
         digest.update(str(value.dtype).encode())
-        digest.update(value.numpy().tobytes())
+        digest.update(memoryview(value.numpy()).cast("B"))
     return digest.hexdigest()
 
 

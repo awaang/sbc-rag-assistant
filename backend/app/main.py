@@ -6,17 +6,21 @@ import os
 import json
 import hashlib
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
+from threading import Thread
 from typing import Annotated, Any, Literal
 
 import firebase_admin
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile, status
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from firebase_admin import auth, credentials
 from pydantic import BaseModel, Field, model_validator
 import psycopg
 from psycopg.rows import dict_row
+
+from app.auto_ingestion import drain_pending_documents
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
@@ -25,7 +29,13 @@ from app.answering import answer_question
 from app.ingestion import parse_pdf
 from app.retrieval import EmbeddingDataError, MODEL_NAME, MODEL_VERSION, model_fingerprint, retrieve
 
-app = FastAPI(title="SBC Assistant API", version="0.1.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    Thread(target=drain_pending_documents, name="ingestion-recovery", daemon=True).start()
+    yield
+
+
+app = FastAPI(title="SBC Assistant API", version="0.1.0", lifespan=lifespan)
 origins = [
     origin.strip()
     for origin in os.getenv("FRONTEND_ORIGIN", "http://localhost:5173").split(",")
@@ -552,11 +562,13 @@ def extract_document_benefits(
 
 @app.get("/api/admin/documents")
 def list_parsed_documents(
+    background_tasks: BackgroundTasks,
     _admin: Annotated[dict, Depends(require_admin)],
     connection: Annotated[psycopg.Connection, Depends(database_connection)],
 ) -> list[dict]:
-    return [dict(row) for row in connection.execute(
+    documents = [dict(row) for row in connection.execute(
         """SELECT d.document_id, d.original_filename, d.source_url, d.corpus_status, d.review_status,
+                  d.ingestion_queued_at, d.ingestion_attempts,
                   d.ingestion_error, d.processing_stages, d.processing_warnings,
                   p.plan_name, p.insurer, p.plan_type, p.coverage_type,
                   p.plan_year, count(pg.page_id) AS parsed_pages
@@ -565,10 +577,14 @@ def list_parsed_documents(
            GROUP BY d.document_id, p.plan_name, p.insurer, p.plan_type, p.coverage_type, p.plan_year
            ORDER BY d.document_id"""
     ).fetchall()]
+    if any(document["ingestion_queued_at"] for document in documents):
+        background_tasks.add_task(drain_pending_documents, False)
+    return documents
 
 
 @app.post("/api/admin/documents", status_code=201)
 def upload_document(
+    background_tasks: BackgroundTasks,
     admin: Annotated[dict, Depends(require_admin)],
     connection: Annotated[psycopg.Connection, Depends(database_connection)],
     file: UploadFile = File(...),
@@ -579,7 +595,7 @@ def upload_document(
     plan_year: int | None = Form(None, ge=1900, le=2200),
     source_url: str | None = Form(None, max_length=2000),
 ) -> dict:
-    """Store an uploaded candidate PDF durably; upload never verifies/approves it."""
+    """Store a candidate PDF and start ingestion after returning the response."""
     max_bytes = int(os.getenv("MAX_UPLOAD_BYTES", str(15 * 1024 * 1024)))
     filename = Path(file.filename or "upload.pdf").name[:255]
     if not filename.lower().endswith(".pdf") or file.content_type not in {"application/pdf", "application/octet-stream"}:
@@ -603,11 +619,13 @@ def upload_document(
         row = connection.execute(
             """INSERT INTO documents
                (plan_id, original_filename, source_url, document_sha256, pdf_bytes,
-                corpus_status, review_status, uploaded_by_firebase_uid)
-               VALUES (%s,%s,%s,%s,%s,'candidate','uploaded',%s)
+                corpus_status, review_status, uploaded_by_firebase_uid, ingestion_queued_at)
+               VALUES (%s,%s,%s,%s,%s,'candidate','uploaded',%s,now())
                RETURNING document_id, review_status, corpus_status""",
             (plan["plan_id"], filename, source_url or None, digest, pdf_bytes, admin.get("uid")),
         ).fetchone()
+    connection.commit()
+    background_tasks.add_task(drain_pending_documents)
     return dict(row)
 
 
@@ -667,17 +685,22 @@ def review_document(
 @app.post("/api/admin/documents/{document_id}/retry")
 def retry_document_ingestion(
     document_id: int,
+    background_tasks: BackgroundTasks,
     _admin: Annotated[dict, Depends(require_admin)],
     connection: Annotated[psycopg.Connection, Depends(database_connection)],
 ) -> dict:
     row = connection.execute(
         """UPDATE documents SET review_status = 'uploaded', ingestion_error = NULL,
-           processing_stages = '{}'::jsonb, processing_warnings = '[]'::jsonb
+           processing_stages = '{}'::jsonb, processing_warnings = '[]'::jsonb,
+           ingestion_queued_at = now(), ingestion_attempts = 0
            WHERE document_id = %s AND review_status IN ('needs_review', 'failed')
+             AND ingestion_queued_at IS NULL
            RETURNING document_id, review_status""", (document_id,)
     ).fetchone()
     if not row:
         raise HTTPException(status_code=409, detail="Only a failed or pending document can be queued for reprocessing.")
+    connection.commit()
+    background_tasks.add_task(drain_pending_documents)
     return dict(row)
 
 

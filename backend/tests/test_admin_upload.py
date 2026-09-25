@@ -20,6 +20,9 @@ class FakeConnection:
     def transaction(self):
         yield
 
+    def commit(self):
+        pass
+
     def execute(self, sql, _params=None):
         if "SELECT document_id FROM documents" in sql:
             return FakeResult(None)
@@ -38,7 +41,9 @@ def teardown_function():
     app.dependency_overrides.clear()
 
 
-def test_admin_upload_stays_candidate_until_review():
+def test_admin_upload_queues_candidate_for_automatic_processing(monkeypatch):
+    scheduled = []
+    monkeypatch.setattr("app.main.drain_pending_documents", lambda: scheduled.append(True))
     app.dependency_overrides[require_user] = lambda: {"uid": "admin-uid", "admin": True}
     app.dependency_overrides[database_connection] = lambda: FakeConnection()
     client = TestClient(app)
@@ -53,6 +58,7 @@ def test_admin_upload_stays_candidate_until_review():
     assert response.status_code == 201
     assert response.json()["review_status"] == "uploaded"
     assert response.json()["corpus_status"] == "candidate"
+    assert scheduled == [True]
 
 
 def test_admin_routes_reject_authenticated_non_admins():
@@ -60,6 +66,25 @@ def test_admin_routes_reject_authenticated_non_admins():
     response = TestClient(app).get("/api/admin/documents")
 
     assert response.status_code == 403
+
+
+def test_retry_requeues_and_starts_automatic_processing(monkeypatch):
+    scheduled = []
+    monkeypatch.setattr("app.main.drain_pending_documents", lambda: scheduled.append(True))
+
+    class RetryConnection(FakeConnection):
+        def execute(self, sql, _params=None):
+            assert "UPDATE documents SET review_status = 'uploaded'" in sql
+            assert "ingestion_queued_at = now(), ingestion_attempts = 0" in sql
+            return FakeResult({"document_id": 12, "review_status": "uploaded"})
+
+    app.dependency_overrides[require_user] = lambda: {"uid": "admin-uid", "admin": True}
+    app.dependency_overrides[database_connection] = lambda: RetryConnection()
+
+    response = TestClient(app).post("/api/admin/documents/12/retry")
+
+    assert response.status_code == 200
+    assert scheduled == [True]
 
 
 def test_verifying_benefit_requires_confirmed_section():
