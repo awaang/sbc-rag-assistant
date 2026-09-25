@@ -105,7 +105,7 @@ def process_document(connection, document: dict) -> dict:
         counts = connection.execute(
             """SELECT c.chunk_strategy, count(*) AS total,
                       count(e.embedding_id) AS embedded,
-                      array_agg(e.embedding_values) AS vectors
+                      array_agg(e.embedding_values) FILTER (WHERE e.embedding_id IS NOT NULL) AS vectors
                FROM chunks c LEFT JOIN chunk_embeddings e ON e.chunk_id = c.chunk_id
                  AND e.model_name = %s AND e.model_version = %s AND e.model_fingerprint = %s
                WHERE c.document_id = %s GROUP BY c.chunk_strategy""",
@@ -114,7 +114,11 @@ def process_document(connection, document: dict) -> dict:
         by_strategy = {row["chunk_strategy"]: row for row in counts}
         stages["embedding"] = "completed"
         if readiness_status(stages, warnings, by_strategy) == "failed":
-            raise ValueError("Embeddings are insufficient for both retrieval strategies.")
+            detail = ", ".join(
+                f"{strategy}: {by_strategy.get(strategy, {}).get('embedded', 0)}/{by_strategy.get(strategy, {}).get('total', 0)}"
+                for strategy in ("fixed_size", "section_aware")
+            )
+            raise ValueError(f"Embeddings are incomplete ({detail}).")
         dimension = model_dimension()
         for row in counts:
             vectors = np.asarray(row["vectors"], dtype="float32")

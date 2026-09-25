@@ -7,6 +7,7 @@ import re
 import time
 import hashlib
 from functools import lru_cache
+from threading import Lock
 from typing import Any
 
 MODEL_NAME = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
@@ -17,11 +18,23 @@ def tokenize(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", text.lower())
 
 
+_model_load_lock = Lock()
+
+
 @lru_cache(maxsize=1)
-def _model():
+def _load_model():
     from sentence_transformers import SentenceTransformer
 
-    return SentenceTransformer(MODEL_NAME)
+    model = SentenceTransformer(MODEL_NAME)
+    if any(tensor.is_meta for tensor in model.parameters()):
+        raise RuntimeError("Embedding model weights were not fully loaded.")
+    return model
+
+
+def _model():
+    # lru_cache alone may call a cache miss more than once from concurrent threads.
+    with _model_load_lock:
+        return _load_model()
 
 
 @lru_cache(maxsize=1)
