@@ -244,6 +244,14 @@ type ManagedDocument = {
 };
 type SourceDocument = { document_id: number; original_filename: string; plan_name: string | null; parsed_pages: number; corpus_status: string };
 
+const BENEFIT_REVIEW_GROUPS = [
+  { status: "pending_review", label: "Pending review", tone: "border-amber-300 bg-amber-50 text-amber-950", open: true },
+  { status: "ambiguous", label: "Ambiguous", tone: "border-violet-300 bg-violet-50 text-violet-950", open: false },
+  { status: "conflicting", label: "Conflicting", tone: "border-red-300 bg-red-50 text-red-950", open: false },
+  { status: "missing", label: "Missing", tone: "border-slate-300 bg-slate-50 text-slate-800", open: false },
+  { status: "verified", label: "Verified", tone: "border-emerald-300 bg-emerald-50 text-emerald-950", open: false },
+];
+
 function BenefitsReviewPage({ user }: { user: User }) {
   const [rows, setRows] = useState<BenefitRow[]>([]);
   const [documents, setDocuments] = useState<SourceDocument[]>([]);
@@ -296,7 +304,31 @@ function BenefitsReviewPage({ user }: { user: User }) {
       {documents.map((doc) => <div className="flex flex-wrap items-center justify-between gap-3 border-b py-3" key={doc.document_id}><span>{doc.plan_name || doc.original_filename} · {doc.parsed_pages} pages · {doc.corpus_status}</span><Button disabled={busy || !doc.parsed_pages} onClick={() => void extract(doc.document_id)}>Extract candidates</Button></div>)}
       {!documents.length && <p className="py-3 text-sm text-muted-foreground">No documents are available. Complete document ingestion first.</p>}
     </CardContent></Card>
-    <div className="mt-5 space-y-3">{rows.map((row) => <Card key={row.benefit_id}><CardContent className="p-5"><div className="mb-3 flex flex-wrap justify-between gap-2"><strong>{row.plan_name} · {row.category.replace(/_/g, " ")}</strong><span className="text-xs text-muted-foreground">{row.original_filename} · {row.source_section || "Section unavailable"}{row.page_number ? ` · page ${row.page_number}` : ""} · {row.corpus_status}</span></div><form onSubmit={(event) => { event.preventDefault(); void save(row, event.currentTarget); }} className="grid gap-3 lg:grid-cols-[1fr_1fr_180px_auto]"><label className="field-label">Source wording / corrected value<textarea className="text-input min-h-20" name="value_text" defaultValue={row.value_text || ""} /></label><label className="field-label">Confirmed benefit section<input className="text-input" name="source_section" maxLength={240} defaultValue={row.source_section_verified ? row.source_section || "" : ""} /></label><label className="field-label">Dimensions (JSON)<textarea className="text-input min-h-20 font-mono text-xs" name="dimensions" defaultValue={JSON.stringify(row.dimensions || {}, null, 2)} /></label><label className="field-label">Review status<select className="text-input" name="verification_status" defaultValue={row.verification_status}><option value="pending_review">Pending review</option><option value="verified">Verified</option><option value="missing">Missing</option><option value="ambiguous">Ambiguous</option><option value="conflicting">Conflicting</option></select></label><div className="self-end"><Button type="submit" disabled={busy}>Save review</Button></div></form></CardContent></Card>)}</div>
+    <div className="mt-5 space-y-3">
+      {BENEFIT_REVIEW_GROUPS.map((group) => {
+        const groupRows = rows.filter((row) => row.verification_status === group.status);
+        if (!groupRows.length) return null;
+        return <details key={group.status} open={group.open} className={`benefit-review-group overflow-hidden rounded-xl border ${group.tone}`}>
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 font-semibold marker:hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2">
+            <span className="flex items-center gap-1.5"><svg aria-hidden="true" className="benefit-review-chevron h-4 w-4 shrink-0" viewBox="0 0 20 20" fill="none"><path d="m5.5 7.5 4.5 4.5 4.5-4.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>{group.label}</span>
+            <span className="rounded-full bg-white/70 px-2.5 py-0.5 text-sm tabular-nums">{groupRows.length}</span>
+          </summary>
+          <div className="space-y-3 border-t border-current/15 p-3">
+            {groupRows.map((row) => <Card key={row.benefit_id}><CardContent className="p-5">
+              <div className="mb-3 flex flex-wrap justify-between gap-2"><strong>{row.plan_name} · {row.category.replace(/_/g, " ")}</strong><span className="text-xs text-muted-foreground">{row.original_filename} · {row.source_section || "Section unavailable"}{row.page_number ? ` · page ${row.page_number}` : ""} · {row.corpus_status}</span></div>
+              <form onSubmit={(event) => { event.preventDefault(); void save(row, event.currentTarget); }} className="grid gap-3 lg:grid-cols-[1fr_1fr_180px_auto]">
+                <label className="field-label">Source wording / corrected value<textarea className="text-input min-h-20" name="value_text" defaultValue={row.value_text || ""} /></label>
+                <label className="field-label">Confirmed benefit section<input className="text-input" name="source_section" maxLength={240} defaultValue={row.source_section_verified ? row.source_section || "" : ""} /></label>
+                <label className="field-label">Dimensions (JSON)<textarea className="text-input min-h-20 font-mono text-xs" name="dimensions" defaultValue={JSON.stringify(row.dimensions || {}, null, 2)} /></label>
+                <label className="field-label">Review status<select className="text-input" name="verification_status" defaultValue={row.verification_status}><option value="pending_review">Pending review</option><option value="verified">Verified</option><option value="missing">Missing</option><option value="ambiguous">Ambiguous</option><option value="conflicting">Conflicting</option></select></label>
+                <div className="self-end"><Button type="submit" disabled={busy}>Save review</Button></div>
+              </form>
+            </CardContent></Card>)}
+          </div>
+        </details>;
+      })}
+      {!rows.length && <Card><CardContent className="p-5 text-sm text-muted-foreground">No benefit candidates yet. Extract candidates from a parsed document to begin review.</CardContent></Card>}
+    </div>
   </div>;
 }
 
