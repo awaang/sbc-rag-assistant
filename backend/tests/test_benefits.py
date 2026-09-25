@@ -123,3 +123,17 @@ def test_kaiser_family_each_member_header_is_preserved_separately():
     assert per_member.value_text == "Plan Out-of-Pocket Maximum: $1,500 Individual"
     assert per_member.dimensions["family_context"].startswith("Family Coverage Each Member")
     assert per_member.status == "pending_review"
+
+
+def test_kaiser_candidates_use_benefit_sections_instead_of_column_headers():
+    repository_root = Path(__file__).resolve().parents[2]
+    source_pdf = repository_root / "data/source-documents/received/Kaiser HMO Plan Summary 2017.pdf"
+    candidates = extract_candidates(parse_pdf(source_pdf.read_bytes()))
+
+    deductible = [item for item in candidates if item.category == "deductible"
+                  and item.value_text.startswith("Plan Deductible")]
+    emergency = [item for item in candidates if item.category == "er_cost_sharing"]
+    assert len(deductible) == 3
+    assert {item.section for item in deductible} == {"Out-of-Pocket Maximum(s) and Deductible(s)"}
+    assert len(emergency) == 1
+    assert emergency[0].section == "Emergency Health Coverage You Pay"

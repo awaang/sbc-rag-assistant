@@ -1,5 +1,271 @@
 {
-  "manifest_version": "provisional-v1",
-  "corpus": "six received candidate documents; SBC/public-source status unverified",
-  "questions": []
+  "manifest_version": "provisional-v2",
+  "corpus": "Six received candidate summaries; use is provisional. SBC status and public availability are unverified.",
+  "source_documents": [
+    {
+      "source_document_id": "candidate-aetna-hmo-2017",
+      "filename": "Aetna HMO Plan Summary 01.01.2017.pdf",
+      "sha256": "0473babf8baca836901edeeb5c1855500768b8af8f28292c7d0487afc3126319",
+      "coverage_type": "medical"
+    },
+    {
+      "source_document_id": "candidate-aetna-oamc-2017",
+      "filename": "Aetna OAMC Plan Summary  01.01.2017.pdf",
+      "sha256": "00865e8d56bf28bb25fa33b402cc08ecd9497a74f14bf77670311bebadaab7d7",
+      "coverage_type": "medical"
+    },
+    {
+      "source_document_id": "candidate-guardian-dental-ppo-2017",
+      "filename": "Guardian Dental PPO Plan Summary 2017.pdf",
+      "sha256": "564ca36ed05677fac012fd0b4cc09d68984663ffae460f2b322836140911e8e3",
+      "coverage_type": "dental"
+    },
+    {
+      "source_document_id": "candidate-guardian-vsp-vision-2017",
+      "filename": "Guardian VSP Vision Plan Summary 2017.pdf",
+      "sha256": "bf41654b6df8073b0f3ac897591b5b0407cf34973a0f4fab271fdaa186c46297",
+      "coverage_type": "vision"
+    },
+    {
+      "source_document_id": "candidate-kaiser-traditional-2017",
+      "filename": "Kaiser HMO Plan Summary 2017.pdf",
+      "sha256": "aacfcc0f15c450d7084d375a4c4124a66078f7b2d41edce8cec198b8cfff3be2",
+      "coverage_type": "medical"
+    },
+    {
+      "source_document_id": "candidate-group-health-cooperative-wa-2017",
+      "filename": "Kaiser WA.pdf",
+      "sha256": "dd599c17793a82e1e875b190b1e53509d2152be914db3322b0bac55be2cb1e79",
+      "coverage_type": "medical",
+      "identity_note": "The PDF identifies Group Health Cooperative; the filename says Kaiser WA."
+    }
+  ],
+  "questions": [
+    {
+      "question_id": "aetna_hmo_01",
+      "source_document_ids": ["candidate-aetna-hmo-2017"],
+      "question": "For the Aetna HMO California plan, what are the individual and family deductibles and out-of-pocket maximums?",
+      "question_type": "medical_limits",
+      "expected_answer": "The plan lists no individual or family deductible. Its out-of-pocket maximum is $2,500 individual and $5,000 family per calendar year.",
+      "expected_document_sha256s": ["0473babf8baca836901edeeb5c1855500768b8af8f28292c7d0487afc3126319"],
+      "expected_pages": [1]
+    },
+    {
+      "question_id": "aetna_hmo_02",
+      "source_document_ids": ["candidate-aetna-hmo-2017"],
+      "question": "What does an emergency room visit cost under the Aetna HMO, and is the copay still due if I am admitted?",
+      "question_type": "medical_emergency",
+      "expected_answer": "$100 copay; the copay is waived if admitted.",
+      "expected_document_sha256s": ["0473babf8baca836901edeeb5c1855500768b8af8f28292c7d0487afc3126319"],
+      "expected_pages": [2]
+    },
+    {
+      "question_id": "aetna_hmo_03",
+      "source_document_ids": ["candidate-aetna-hmo-2017"],
+      "question": "What are the Aetna HMO office visit copays for primary care and specialist visits?",
+      "question_type": "medical_office_visits",
+      "expected_answer": "Primary care visits have a $20 office visit copay; specialist office visits have a $20 copay.",
+      "expected_document_sha256s": ["0473babf8baca836901edeeb5c1855500768b8af8f28292c7d0487afc3126319"],
+      "expected_pages": [1, 2]
+    },
+    {
+      "question_id": "aetna_hmo_04",
+      "source_document_ids": ["candidate-aetna-hmo-2017"],
+      "question": "What is the Aetna HMO copay for inpatient hospital coverage?",
+      "question_type": "medical_hospital",
+      "expected_answer": "$500 copay for inpatient coverage.",
+      "expected_document_sha256s": ["0473babf8baca836901edeeb5c1855500768b8af8f28292c7d0487afc3126319"],
+      "expected_pages": [2]
+    },
+    {
+      "question_id": "aetna_pos_01",
+      "source_document_ids": ["candidate-aetna-oamc-2017"],
+      "question": "For the Aetna Open Access Managed Choice POS plan, what are the in-network and out-of-network individual and family deductibles?",
+      "question_type": "medical_limits",
+      "expected_answer": "In network: $300 individual and $600 family. Out of network: $600 individual and $1,200 family, per calendar year.",
+      "expected_document_sha256s": ["00865e8d56bf28bb25fa33b402cc08ecd9497a74f14bf77670311bebadaab7d7"],
+      "expected_pages": [1]
+    },
+    {
+      "question_id": "aetna_pos_02",
+      "source_document_ids": ["candidate-aetna-oamc-2017"],
+      "question": "How is emergency room care covered in and out of network under the Aetna POS plan?",
+      "question_type": "medical_emergency",
+      "expected_answer": "In network: 20% after a $100 copay, with the deductible waived. Out of network: the same as in-network care.",
+      "expected_document_sha256s": ["00865e8d56bf28bb25fa33b402cc08ecd9497a74f14bf77670311bebadaab7d7"],
+      "expected_pages": [2]
+    },
+    {
+      "question_id": "aetna_pos_03",
+      "source_document_ids": ["candidate-aetna-oamc-2017"],
+      "question": "What does an Aetna POS member pay for a primary care office visit in network versus out of network?",
+      "question_type": "medical_office_visits",
+      "expected_answer": "In network: $15 copay with the deductible waived. Out of network: 40% after the deductible.",
+      "expected_document_sha256s": ["00865e8d56bf28bb25fa33b402cc08ecd9497a74f14bf77670311bebadaab7d7"],
+      "expected_pages": [2]
+    },
+    {
+      "question_id": "aetna_pos_04",
+      "source_document_ids": ["candidate-aetna-oamc-2017"],
+      "question": "What is the Aetna POS individual Payment Limit in network and out of network?",
+      "question_type": "medical_limits",
+      "expected_answer": "The document calls this a Payment Limit: $2,800 individual in network and $5,600 individual out of network per calendar year. It is distinct from the deductible, which is listed separately.",
+      "expected_document_sha256s": ["00865e8d56bf28bb25fa33b402cc08ecd9497a74f14bf77670311bebadaab7d7"],
+      "expected_pages": [1]
+    },
+    {
+      "question_id": "guardian_dental_01",
+      "source_document_ids": ["candidate-guardian-dental-ppo-2017"],
+      "question": "What is the Guardian DentalGuard Preferred plan's out-of-network annual deductible, and what happens after three family members meet it?",
+      "question_type": "dental_cost_sharing",
+      "expected_answer": "The out-of-network deductible is $25, and it is combined across in- and out-of-network services. Once each of three family members has met the annual deductible, no further deductibles apply.",
+      "expected_document_sha256s": ["564ca36ed05677fac012fd0b4cc09d68984663ffae460f2b322836140911e8e3"],
+      "expected_pages": [1]
+    },
+    {
+      "question_id": "guardian_dental_02",
+      "source_document_ids": ["candidate-guardian-dental-ppo-2017"],
+      "question": "What is the Guardian DentalGuard Preferred calendar-year maximum benefit, and does it combine in-network and out-of-network services?",
+      "question_type": "dental_limits",
+      "expected_answer": "$2,000; the document says the out-of-network amount is the combined calendar-year maximum for both in- and out-of-network services.",
+      "expected_document_sha256s": ["564ca36ed05677fac012fd0b4cc09d68984663ffae460f2b322836140911e8e3"],
+      "expected_pages": [1]
+    },
+    {
+      "question_id": "guardian_dental_03",
+      "source_document_ids": ["candidate-guardian-dental-ppo-2017"],
+      "question": "What percentage does the Guardian dental plan pay for preventive care, including cleaning, in network and out of network?",
+      "question_type": "dental_coverage",
+      "expected_answer": "The summary lists 100% for preventive care and cleaning in both network columns.",
+      "expected_document_sha256s": ["564ca36ed05677fac012fd0b4cc09d68984663ffae460f2b322836140911e8e3"],
+      "expected_pages": [1]
+    },
+    {
+      "question_id": "guardian_dental_04",
+      "source_document_ids": ["candidate-guardian-dental-ppo-2017"],
+      "question": "What does the Guardian dental summary list for basic fillings and major single crowns, and are orthodontia benefits available?",
+      "question_type": "dental_coverage",
+      "expected_answer": "Basic fillings are listed at 80% in network and out of network. Major single crowns are 50% in both columns. Orthodontia is listed as not available.",
+      "expected_document_sha256s": ["564ca36ed05677fac012fd0b4cc09d68984663ffae460f2b322836140911e8e3"],
+      "expected_pages": [2]
+    },
+    {
+      "question_id": "guardian_vision_01",
+      "source_document_ids": ["candidate-guardian-vsp-vision-2017"],
+      "question": "Under the Guardian VSP vision summary, how often are exams, lenses, and frames available, and what first-service copay is listed?",
+      "question_type": "vision_cost_sharing",
+      "expected_answer": "The listed first-service copay is $20. Exams and lenses are available once a year; frames are available once every other year.",
+      "expected_document_sha256s": ["bf41654b6df8073b0f3ac897591b5b0407cf34973a0f4fab271fdaa186c46297"],
+      "expected_pages": [1]
+    },
+    {
+      "question_id": "guardian_vision_02",
+      "source_document_ids": ["candidate-guardian-vsp-vision-2017"],
+      "question": "What out-of-network amount is listed for lined bifocal lenses under the Guardian VSP vision summary?",
+      "question_type": "vision_cost_sharing",
+      "expected_answer": "The out-of-network amount is over $67.00.",
+      "expected_document_sha256s": ["bf41654b6df8073b0f3ac897591b5b0407cf34973a0f4fab271fdaa186c46297"],
+      "expected_pages": [1]
+    },
+    {
+      "question_id": "guardian_vision_03",
+      "source_document_ids": ["candidate-guardian-vsp-vision-2017"],
+      "question": "What in-network frame allowance and discount, and what out-of-network amount, does the Guardian VSP summary list?",
+      "question_type": "vision_limits",
+      "expected_answer": "In network: $130 frame allowance and 20% discount on the amount over $130. Out of network: amount over $48.",
+      "expected_document_sha256s": ["bf41654b6df8073b0f3ac897591b5b0407cf34973a0f4fab271fdaa186c46297"],
+      "expected_pages": [2]
+    },
+    {
+      "question_id": "guardian_vision_04",
+      "source_document_ids": ["candidate-guardian-vsp-vision-2017"],
+      "question": "For conventional contact lenses, what amount over the allowance is listed in network and out of network?",
+      "question_type": "vision_limits",
+      "expected_answer": "The summary lists an amount over $130 in network and an amount over $130 out of network.",
+      "expected_document_sha256s": ["bf41654b6df8073b0f3ac897591b5b0407cf34973a0f4fab271fdaa186c46297"],
+      "expected_pages": [2]
+    },
+    {
+      "question_id": "kaiser_traditional_01",
+      "source_document_ids": ["candidate-kaiser-traditional-2017"],
+      "question": "What are the Kaiser Permanente Traditional plan deductible and out-of-pocket maximum for self-only and family coverage?",
+      "question_type": "medical_limits",
+      "expected_answer": "There is no plan deductible. The out-of-pocket maximum is $1,500 for self-only coverage, $1,500 per member in a family, and $3,000 for the entire family.",
+      "expected_document_sha256s": ["aacfcc0f15c450d7084d375a4c4124a66078f7b2d41edce8cec198b8cfff3be2"],
+      "expected_pages": [1]
+    },
+    {
+      "question_id": "kaiser_traditional_02",
+      "source_document_ids": ["candidate-kaiser-traditional-2017"],
+      "question": "What are the Kaiser Traditional plan copays for most primary care and physician specialist visits?",
+      "question_type": "medical_office_visits",
+      "expected_answer": "$30 per visit for most primary care visits and most physician specialist visits.",
+      "expected_document_sha256s": ["aacfcc0f15c450d7084d375a4c4124a66078f7b2d41edce8cec198b8cfff3be2"],
+      "expected_pages": [1]
+    },
+    {
+      "question_id": "kaiser_traditional_03",
+      "source_document_ids": ["candidate-kaiser-traditional-2017"],
+      "question": "What is the Kaiser Traditional plan emergency department visit cost, and what happens to the cost share if the patient is admitted?",
+      "question_type": "medical_emergency",
+      "expected_answer": "$50 per emergency department visit. This cost share does not apply if the patient is admitted directly to the hospital as an inpatient for covered services.",
+      "expected_document_sha256s": ["aacfcc0f15c450d7084d375a4c4124a66078f7b2d41edce8cec198b8cfff3be2"],
+      "expected_pages": [1]
+    },
+    {
+      "question_id": "kaiser_traditional_04",
+      "source_document_ids": ["candidate-kaiser-traditional-2017"],
+      "question": "What does the Kaiser Traditional summary say the member pays for room and board, surgery, anesthesia, X-rays, laboratory tests, and drugs during hospitalization?",
+      "question_type": "medical_hospital",
+      "expected_answer": "$500 per admission.",
+      "expected_document_sha256s": ["aacfcc0f15c450d7084d375a4c4124a66078f7b2d41edce8cec198b8cfff3be2"],
+      "expected_pages": [1]
+    },
+    {
+      "question_id": "group_health_01",
+      "source_document_ids": ["candidate-group-health-cooperative-wa-2017"],
+      "question": "According to the Group Health Cooperative Multisite summary, what are the plan deductible, coinsurance, and individual/family out-of-pocket limits?",
+      "question_type": "medical_limits",
+      "expected_answer": "No annual deductible and no plan coinsurance. The individual out-of-pocket limit is $2,000 and the family limit is $4,000.",
+      "expected_document_sha256s": ["dd599c17793a82e1e875b190b1e53509d2152be914db3322b0bac55be2cb1e79"],
+      "expected_pages": [1]
+    },
+    {
+      "question_id": "group_health_02",
+      "source_document_ids": ["candidate-group-health-cooperative-wa-2017"],
+      "question": "What copay does the Group Health Cooperative summary list for emergency services, and is it waived after admission?",
+      "question_type": "medical_emergency",
+      "expected_answer": "$100 at either a designated or non-designated facility; the copay is waived if admitted.",
+      "expected_document_sha256s": ["dd599c17793a82e1e875b190b1e53509d2152be914db3322b0bac55be2cb1e79"],
+      "expected_pages": [2]
+    },
+    {
+      "question_id": "group_health_03",
+      "source_document_ids": ["candidate-group-health-cooperative-wa-2017"],
+      "question": "What does the Group Health Cooperative summary list for outpatient office visits and outpatient surgery?",
+      "question_type": "medical_office_visits",
+      "expected_answer": "Outpatient office visits have a $20 copay. Outpatient surgery has a $100 copay.",
+      "expected_document_sha256s": ["dd599c17793a82e1e875b190b1e53509d2152be914db3322b0bac55be2cb1e79"],
+      "expected_pages": [1]
+    },
+    {
+      "question_id": "group_health_04",
+      "source_document_ids": ["candidate-group-health-cooperative-wa-2017"],
+      "question": "What are the Group Health Cooperative summary's 30-day preferred generic and preferred brand prescription copays, and the mail-order cost share for a 90-day supply?",
+      "question_type": "medical_pharmacy",
+      "expected_answer": "Preferred generic: $15 per 30-day supply; preferred brand: $30 per 30-day supply. Mail order is twice the prescription cost share for a 90-day supply.",
+      "expected_document_sha256s": ["dd599c17793a82e1e875b190b1e53509d2152be914db3322b0bac55be2cb1e79"],
+      "expected_pages": [1]
+    },
+    {
+      "question_id": "cross_plan_oop_01",
+      "source_document_ids": ["candidate-aetna-hmo-2017", "candidate-kaiser-traditional-2017", "candidate-group-health-cooperative-wa-2017"],
+      "question": "Compare the individual and family out-of-pocket maximums in the Aetna HMO, Kaiser Permanente Traditional, and Group Health Cooperative Multisite summaries.",
+      "question_type": "cross_plan_comparison",
+      "expected_answer": "Aetna HMO: $2,500 individual and $5,000 family. Kaiser Traditional: $1,500 self-only, $1,500 per family member, and $3,000 for the entire family. Group Health Cooperative: $2,000 individual and $4,000 family.",
+      "expected_document_sha256s": ["0473babf8baca836901edeeb5c1855500768b8af8f28292c7d0487afc3126319", "aacfcc0f15c450d7084d375a4c4124a66078f7b2d41edce8cec198b8cfff3be2", "dd599c17793a82e1e875b190b1e53509d2152be914db3322b0bac55be2cb1e79"],
+      "expected_pages": [1],
+      "require_all_documents": true
+    }
+  ]
 }

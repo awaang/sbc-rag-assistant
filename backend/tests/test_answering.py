@@ -1,8 +1,12 @@
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
 from app import answering
+from app.benefits import extract_candidates
+from app.ingestion import build_chunks, parse_pdf
+from app.retrieval import retrieve
 
 
 MEDICAL = [
@@ -178,7 +182,7 @@ def test_text_citation_rejects_plan_title_as_section():
         chunk = {"plan_name": "Basic", "original_filename": "plan.pdf", "chunk_id": 1,
                  "rank": 1, "score": 1.0, "provenance": {"units": [{
                      "kind": "text", "page": 1, "section": title,
-                     "line": "Urgent care visits are covered with a $20 copay.",
+                     "line": 1, "text": "Urgent care visits are covered with a $20 copay.",
                  }]}}
 
         assert answering._source_unit(chunk, {"urgent", "care"}) is None
@@ -188,9 +192,88 @@ def test_text_citation_keeps_relevant_benefit_section():
     chunk = {"plan_name": "Basic", "original_filename": "plan.pdf", "chunk_id": 1,
              "rank": 1, "score": 1.0, "provenance": {"units": [{
                  "kind": "text", "page": 2, "section": "URGENT CARE",
-                 "line": "Urgent care visits are covered with a $20 copay.",
+                 "line": 1, "text": "Urgent care visits are covered with a $20 copay.",
              }]}}
 
     result = answering._source_unit(chunk, {"urgent", "care"})
 
     assert result[1]["section"] == "URGENT CARE"
+
+
+def test_kaiser_pdf_flows_through_bm25_and_cited_answers():
+    source_pdf = (Path(__file__).resolve().parents[2] /
+                  "data/source-documents/received/Kaiser HMO Plan Summary 2017.pdf")
+    pages = parse_pdf(source_pdf.read_bytes())
+    plan = {"plan_id": 1, "insurer": "Kaiser Permanente", "plan_name": "Traditional Plan",
+            "plan_type": "hmo", "coverage_type": "medical", "plan_year": 2017}
+    chunks = [{"chunk_id": index, "document_id": 1, "plan_id": 1,
+               "plan_name": plan["plan_name"], "original_filename": source_pdf.name,
+               "chunk_text": chunk["text"], "page_start": chunk["page_start"],
+               "page_end": chunk["page_end"], "provenance": chunk["provenance"]}
+              for index, chunk in enumerate(build_chunks(pages)["section_aware"], 1)]
+    benefits = [{"benefit_id": index, "plan_id": 1, "category": candidate.category,
+                 "value_text": candidate.value_text, "dimensions": candidate.dimensions,
+                 "verification_status": candidate.status, "reviewed_at": None,
+                 "source_section_verified": False, "section": candidate.section,
+                 "page_number": candidate.page_number, "parse_status": "parsed",
+                 "document_id": 1, "original_filename": source_pdf.name,
+                 "plan_name": plan["plan_name"]}
+                for index, candidate in enumerate(extract_candidates(pages), 1)]
+
+    class Result:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def fetchall(self):
+            return self.rows
+
+    class Connection:
+        def execute(self, sql, params=()):
+            if "FROM plans p JOIN documents" in sql:
+                return Result([plan])
+            if "FROM benefit_records b" in sql:
+                return Result([row for row in benefits if row["category"] == params[1]])
+            if "FROM chunks c JOIN documents d" in sql:
+                return Result(chunks)
+            raise AssertionError(sql)
+
+    connection = Connection()
+    search = retrieve(connection, "urgent care", "bm25", "section_aware", top_k=10)
+    assert search["results"]
+    assert any("Urgent care consultations" in row["chunk_text"] for row in search["results"])
+
+    coverage = answering.answer_question(
+        connection, "Is urgent care covered under the Kaiser Permanente Traditional Plan?")
+    assert coverage["status"] == "answered"
+    assert "Urgent care consultations" in coverage["answer"]
+    assert coverage["citations"][0]["section"] == "Professional Services (Plan Provider office visits) You Pay"
+
+    deductible = answering.answer_question(
+        connection, "What is the Kaiser Permanente Traditional Plan individual deductible?")
+    assert deductible["status"] == "answered"
+    assert "Plan Deductible: None Individual" in deductible["answer"]
+    assert "$0" not in deductible["answer"]
+    assert deductible["citations"][0]["section"] == "Out-of-Pocket Maximum(s) and Deductible(s)"
+
+    drug_deductible = answering.answer_question(
+        connection, "What is the Kaiser Permanente Traditional Plan individual drug deductible?")
+    assert drug_deductible["status"] == "answered"
+    assert "Drug Deductible: None Individual" in drug_deductible["answer"]
+
+    emergency = answering.answer_question(
+        connection, "What is the Kaiser Permanente Traditional Plan emergency department cost?")
+    assert emergency["status"] == "answered"
+    assert "$50 per visit" in emergency["answer"]
+    assert emergency["citations"][0]["section"] == "Emergency Health Coverage You Pay"
+
+    unsupported = answering.answer_question(
+        connection, "What is the Kaiser Permanente Traditional Plan out-of-network individual deductible?")
+    assert unsupported["status"] == "insufficient_evidence"
+    assert unsupported["citations"] == []
+
+
+def test_none_only_counts_when_stated_as_a_deductible_value():
+    assert answering._value({"category": "deductible", "value_text": "Plan Deductible: None Individual"}) == "none"
+    assert answering._value({"category": "deductible", "value_text": "None of these; deductible: $500"}) == "$500"
+    assert answering._value({"category": "copay", "value_text": "None of these copays apply"}) is None
+    assert answering._ordered_value("none") is None

@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from app.ingestion import iter_table_rows
+from app.ingestion import _units, iter_table_rows
 
 Category = Literal["deductible", "er_cost_sharing", "copay", "out_of_pocket_maximum"]
 
@@ -199,7 +199,10 @@ def extract_candidates(pages: list[dict]) -> list[BenefitCandidate]:
         table_candidates = _table_candidate_rows(page)
         candidates.extend(table_candidates)
         table_categories = {candidate.category for candidate in table_candidates}
-        for raw_line in str(page.get("text", "")).splitlines():
+        text_sections = {unit.provenance["line"]: unit.section
+                         for unit in _units([{**page, "tables": page.get("tables") or []}])
+                         if not unit.table_row}
+        for line_number, raw_line in enumerate(str(page.get("text", "")).splitlines(), 1):
             line = " ".join(raw_line.split())
             if not line:
                 continue
@@ -225,7 +228,7 @@ def extract_candidates(pages: list[dict]) -> list[BenefitCandidate]:
                 category=category,
                 value_text=line,
                 page_number=page_number,
-                section=page.get("section_heading"),
+                section=text_sections.get(line_number) or page.get("section_heading"),
                 dimensions=dimensions,
                 status="ambiguous" if len(normalized_values) > 1 else "pending_review",
             ))

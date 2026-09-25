@@ -178,3 +178,23 @@ def test_table_rows_follow_page_position_and_keep_their_own_section(monkeypatch)
     assert [unit["kind"] for unit in units] == ["text", "table_row", "table_row", "text"]
     assert units[-1]["section"] == "OTHER SERVICES"
     assert extract_candidates(pages)[0].section == "COST SHARING"
+
+
+def test_kaiser_title_case_sections_follow_rows_and_preserve_text_wording():
+    from pathlib import Path
+
+    source_pdf = (Path(__file__).resolve().parents[2] /
+                  "data/source-documents/received/Kaiser HMO Plan Summary 2017.pdf")
+    pages = parse_pdf(source_pdf.read_bytes())
+    units = [unit for chunk in build_chunks(pages)["section_aware"]
+             for unit in chunk["provenance"]["units"]]
+    emergency = next(unit for unit in units if unit["kind"] == "text"
+                     and unit["text"].startswith("Emergency Department visits"))
+    deductible = next(unit for unit in units if unit["kind"] == "table_row"
+                      and unit["cells"][0] == "Plan Deductible")
+
+    assert emergency["section"] == "Emergency Health Coverage You Pay"
+    assert emergency["text"].endswith("$50 per visit")
+    assert deductible["section"] == "Out-of-Pocket Maximum(s) and Deductible(s)"
+    assert pages[0]["tables"][0]["row_sections"][2] == deductible["section"]
+    assert all(unit["section"] != "Benefit Summary" for unit in units)

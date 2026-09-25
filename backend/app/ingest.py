@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from app.ingestion import build_chunks, parse_pdf
+from app.ingestion import _is_heading, build_chunks, parse_pdf
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
@@ -21,7 +21,7 @@ def _section_heading(text: str) -> str | None:
     headings: list[str] = []
     for line in text.splitlines():
         value = " ".join(line.split())
-        if value and len(value) <= 120 and value.isupper() and not re.search(r"[.$%]", value):
+        if _is_heading(value):
             if value not in headings:
                 headings.append(value)
     return headings[0] if len(headings) == 1 else None

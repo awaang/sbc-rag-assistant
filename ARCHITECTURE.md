@@ -53,7 +53,7 @@ This is a genuine upload and ingestion workflow. PDF parsing and document-embedd
 
 For every document retain stable document and plan IDs, insurer, plan name/type/year, verified public source URL, original filename, upload/approval state, and document checksum. Public availability and SBC status must be established before it counts toward the six-SBC requirement.
 
-For parsed pages/rows/chunks retain document/plan IDs, stable record IDs, page, section heading when detectable, table and row context, parse status, and chunk strategy/version. Each table row must stay intact with sufficient headers/context; mark unavailable provenance rather than inventing it.
+For parsed pages/rows/chunks retain document/plan IDs, stable record IDs, page, section heading when detectable, table and row context, parse status, and chunk strategy/version. Text-unit provenance stores both the source wording and its line number. Each table row must stay intact with sufficient headers/context; mark unavailable provenance rather than inventing it. Detected benefit headings take precedence over table column labels in citations; column labels remain available as fallback context when no usable benefit heading is detected.
 
 Structured benefit records store the value exactly as stated, category, plan/document identity, network and individual/family distinctions when present, source section/page/row, reviewer status, and missing/ambiguous/conflicting status. Initial categories are deductible, ER cost sharing, copays, and out-of-pocket maximum. Missing data is never represented as zero.
 

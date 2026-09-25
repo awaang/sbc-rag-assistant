@@ -23,6 +23,7 @@ LABELS = {
     "out_of_pocket_maximum": "out-of-pocket maximum",
 }
 VALUE = re.compile(r"\$\s?\d[\d,]*(?:\.\d{1,2})?|\b\d+(?:\.\d+)?\s?%|\bno charge\b|\bno deductible\b|\bnot covered\b", re.I)
+NONE_DEDUCTIBLE = re.compile(r"\b(?:plan|drug)?\s*deductible\s*:\s*none\b", re.I)
 COMPARISON = re.compile(r"\b(compare|comparison|difference|versus|vs\.?|between|across|both|higher|lower|more|less)\b", re.I)
 STOP_WORDS = {"a", "about", "and", "are", "at", "be", "benefit", "benefits", "can", "cost", "cover", "covered", "coverage", "do", "does", "for", "how", "i", "in", "include", "included", "is", "it", "many", "me", "much", "my", "of", "on", "plan", "plans", "please", "service", "services", "tell", "the", "their", "this", "to", "under", "what", "whether", "which", "with"}
 NAME_WORDS = {"plan", "plans", "summary", "benefit", "benefits", "coverage", "health", "insurance", "2017"}
@@ -109,6 +110,8 @@ def _dimensions(record: dict) -> tuple[str, str, str]:
 def _value(record: dict) -> str | None:
     wording = str(record.get("value_text") or "")
     values = {re.sub(r"\s+", "", match.group(0)).lower() for match in VALUE.finditer(wording)}
+    if record.get("category") == "deductible" and NONE_DEDUCTIBLE.search(wording):
+        values.add("none")
     if len(values) != 1:
         return None
     return next(iter(values))
@@ -190,6 +193,11 @@ def _numeric_answer(connection, question: str, plans: list[dict], category: str,
     reasons = []
     for plan in plans:
         plan_candidates = [row for row in rows if row["plan_id"] == plan["plan_id"]]
+        if category == "deductible":
+            drug_requested = bool(re.search(r"\b(?:drug|prescription|pharmacy)\b", question, re.I))
+            plan_candidates = [row for row in plan_candidates
+                               if bool(re.search(r"\bdrug deductible\b", row["value_text"], re.I))
+                               == drug_requested]
         candidates = plan_candidates
         if requested:
             candidates = [row for row in candidates if all(
@@ -267,9 +275,12 @@ def _source_unit(chunk: dict, terms: set[str]) -> tuple[int, dict] | None:
             cells = [str(value) for value in unit.get("cells") or []]
             wording = " | ".join(f"{headers[index] if index < len(headers) else 'Column'}: {cell}"
                                  for index, cell in enumerate(cells) if cell)
-            section = " | ".join(header for header in headers if header) or unit.get("section")
+            detected_section = unit.get("section")
+            section = (detected_section if detected_section and _usable_section({"section": detected_section,
+                                                                                 "plan_name": chunk.get("plan_name")})
+                       else " | ".join(header for header in headers if header))
         else:
-            wording = str(unit.get("line") or "")
+            wording = str(unit.get("text") or "")
             section = unit.get("section")
         unit_terms = set(tokenize(wording))
         overlap = len(terms & unit_terms)

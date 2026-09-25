@@ -28,7 +28,9 @@ def _clean_cell(value: Any) -> str:
 def _is_heading(line: str) -> bool:
     if not line or len(line) > 120 or re.search(r"[.$%]", line):
         return False
-    return line.isupper() or bool(re.match(r"^\d+(?:\.\d+)*\s+[A-Z]", line))
+    return (line.isupper() or bool(re.match(r"^\d+(?:\.\d+)*\s+[A-Z]", line))
+            or bool(re.search(r"\bYou Pay$", line))
+            or line in {"Accumulation Period", "Out-of-Pocket Maximum(s) and Deductible(s)"})
 
 
 def _header_index(rows: list[list[str]]) -> int | None:
@@ -86,6 +88,8 @@ def _table_heading(row: list[str]) -> str | None:
     if re.fullmatch(r"(?:in|out)[- ]of[- ]network|in[- ]network", heading, re.I):
         return None
     if not _is_heading(heading) or re.search(r"\d|\b(covered|copay|coinsurance)\b", heading, re.I):
+        return None
+    if len(heading) < 5 or heading.startswith("("):
         return None
     if any(not re.fullmatch(r"(?:in|out)[- ]of[- ]network|in[- ]network", cell, re.I)
            for cell in cells[1:]):
@@ -196,7 +200,8 @@ def _units(pages: list[dict[str, Any]]) -> list[Unit]:
                     continue
                 if _is_heading(line):
                     section = line
-                units.append(Unit(line, page_number, section, {"kind": "text", "line": index}))
+                units.append(Unit(line, page_number, section, {"kind": "text", "line": index,
+                                                              "text": line}))
                 continue
             table_number, row_number, headers, row = payload
             section = _table_heading(row) or section

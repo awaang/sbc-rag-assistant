@@ -102,6 +102,8 @@ The local `python -m app.pipeline` command now performs parsing, chunking, candi
 
 **Milestone:** The Phase 5 flow is implemented in code. End-to-end review against actual ingested documents, targeted tests, and measured answer accuracy remain open before treating the milestone as validated.
 
+**Kaiser parsing and answer repair (2026-09-25):** Recognized the Traditional Plan PDF's title-case benefit headings, carried sections into text candidates and table rows, stored text wording in chunk provenance, and accepted the source's literal `None` deductible without converting it to zero. Plan and drug deductible rows are distinguished. A PDF-to-BM25-to-answer regression covers cited urgent-care, emergency-department, and deductible answers plus abstention for missing out-of-network evidence. The configured Neon uploads were reprocessed: the Traditional Plan document is `ready` with no warnings; the separate Kaiser WA document is `ready_with_warnings` because 18 candidates remain ambiguous and 17 lack a detected section. Both now return BM25 evidence. Backend deployment and broader provisional-corpus accuracy measurement remain pending.
+
 ### Phase 6 — Deployment, evaluation, and documentation
 
 - [ ] Deploy React static site and FastAPI web service on Render Free; configure Firebase authorized domains and server secrets; connect Neon Free.
