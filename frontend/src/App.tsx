@@ -236,6 +236,7 @@ type BenefitRow = {
   dimensions: Record<string, string>; page_number: number | null;
   source_section: string | null; source_section_verified: boolean; verification_status: string;
 };
+type BenefitVerificationStatus = "pending_review" | "verified";
 type ManagedDocument = {
   document_id: number; original_filename: string; source_url: string | null;
   corpus_status: string; review_status: string; ingestion_error: string | null;
@@ -245,11 +246,22 @@ type ManagedDocument = {
 type SourceDocument = { document_id: number; original_filename: string; plan_name: string | null; parsed_pages: number; corpus_status: string };
 
 const BENEFIT_REVIEW_GROUPS = [
-  { status: "pending_review", label: "Pending review", tone: "border-amber-300 bg-amber-50 text-amber-950", open: true },
-  { status: "ambiguous", label: "Ambiguous", tone: "border-violet-300 bg-violet-50 text-violet-950", open: false },
-  { status: "conflicting", label: "Conflicting", tone: "border-red-300 bg-red-50 text-red-950", open: false },
-  { status: "missing", label: "Missing", tone: "border-slate-300 bg-slate-50 text-slate-800", open: false },
-  { status: "verified", label: "Verified", tone: "border-emerald-300 bg-emerald-50 text-emerald-950", open: false },
+  { key: "not_verified", label: "Not verified", verified: false, tone: "border-amber-300 bg-amber-50 text-amber-950", open: true },
+  { key: "verified", label: "Verified", verified: true, tone: "border-emerald-300 bg-emerald-50 text-emerald-950", open: false },
+];
+const BENEFIT_STATUS_BADGES: Record<string, { label: string; tone: string }> = {
+  pending_review: { label: "Pending review", tone: "border-amber-300 bg-amber-50 text-amber-900" },
+  missing: { label: "Missing", tone: "border-slate-300 bg-slate-100 text-slate-800" },
+  ambiguous: { label: "Ambiguous", tone: "border-violet-300 bg-violet-50 text-violet-900" },
+  conflicting: { label: "Conflicting", tone: "border-red-300 bg-red-50 text-red-900" },
+  verified: { label: "Verified", tone: "border-emerald-300 bg-emerald-50 text-emerald-900" },
+};
+const BENEFIT_STATUS_GUIDE = [
+  { status: "pending_review", description: "A candidate was extracted, but no reviewer has confirmed it against the PDF yet." },
+  { status: "missing", description: "Review found no usable value for this benefit in the source. Don’t fill the gap by guessing." },
+  { status: "ambiguous", description: "The value or its context is unclear. Extraction may flag multiple distinct values on a source line; check the PDF to determine what each amount means." },
+  { status: "conflicting", description: "Evidence or candidate records disagree about the value. Reconcile the source evidence before relying on it." },
+  { status: "verified", description: "A reviewer confirmed the value, its dimensions, and its source section. It may support an answer when the document and context match." },
 ];
 
 function BenefitsReviewPage({ user }: { user: User }) {
@@ -279,7 +291,7 @@ function BenefitsReviewPage({ user }: { user: User }) {
     catch (e) { setError(e instanceof Error ? e.message : "Extraction failed."); }
     finally { setBusy(false); }
   }
-  async function save(row: BenefitRow, form: HTMLFormElement) {
+  async function save(row: BenefitRow, form: HTMLFormElement, verificationStatus: BenefitVerificationStatus) {
     const values = new FormData(form);
     let dimensions: Record<string, string>;
     try {
@@ -292,8 +304,9 @@ function BenefitsReviewPage({ user }: { user: User }) {
     }
     setBusy(true); setError("");
     try {
-      await api(`/api/admin/benefits/${row.benefit_id}`, { method: "PATCH", body: JSON.stringify({ value_text: values.get("value_text") || null, source_section: values.get("source_section") || null, verification_status: values.get("verification_status"), dimensions }) });
-      setMessage("Review saved."); await refresh();
+      await api(`/api/admin/benefits/${row.benefit_id}`, { method: "PATCH", body: JSON.stringify({ value_text: values.get("value_text") || null, source_section: values.get("source_section") || null, verification_status: verificationStatus, dimensions }) });
+      const statusLabel = BENEFIT_STATUS_BADGES[verificationStatus]?.label || "updated";
+      setMessage(`Benefit ${statusLabel.toLowerCase()}.`); await refresh();
     } catch (e) { setError(e instanceof Error ? e.message : "Could not save review."); }
     finally { setBusy(false); }
   }
@@ -304,26 +317,43 @@ function BenefitsReviewPage({ user }: { user: User }) {
       {documents.map((doc) => <div className="flex flex-wrap items-center justify-between gap-3 border-b py-3" key={doc.document_id}><span>{doc.plan_name || doc.original_filename} · {doc.parsed_pages} pages · {doc.corpus_status}</span><Button disabled={busy || !doc.parsed_pages} onClick={() => void extract(doc.document_id)}>Extract candidates</Button></div>)}
       {!documents.length && <p className="py-3 text-sm text-muted-foreground">No documents are available. Complete document ingestion first.</p>}
     </CardContent></Card>
+    <Card className="mt-5"><CardContent className="p-5">
+      <h2 className="font-semibold">Review status guide</h2>
+      <p className="mb-4 mt-1 text-sm text-muted-foreground">Statuses describe extraction and review progress. Only verified values can support numerical answers; the source still needs to match the question.</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {BENEFIT_STATUS_GUIDE.map((item) => <div key={item.status} className="rounded-lg border border-border p-3">
+          <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${BENEFIT_STATUS_BADGES[item.status].tone}`}>{BENEFIT_STATUS_BADGES[item.status].label}</span>
+          <p className="mt-2 text-sm leading-5 text-muted-foreground">{item.description}</p>
+        </div>)}
+      </div>
+    </CardContent></Card>
     <div className="mt-5 space-y-3">
       {BENEFIT_REVIEW_GROUPS.map((group) => {
-        const groupRows = rows.filter((row) => row.verification_status === group.status);
+        const groupRows = rows.filter((row) => (row.verification_status === "verified") === group.verified);
         if (!groupRows.length) return null;
-        return <details key={group.status} open={group.open} className={`benefit-review-group overflow-hidden rounded-xl border ${group.tone}`}>
+        return <details key={group.key} open={group.open} className={`benefit-review-group overflow-hidden rounded-xl border ${group.tone}`}>
           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 font-semibold marker:hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2">
             <span className="flex items-center gap-1.5"><svg aria-hidden="true" className="benefit-review-chevron h-4 w-4 shrink-0" viewBox="0 0 20 20" fill="none"><path d="m5.5 7.5 4.5 4.5 4.5-4.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>{group.label}</span>
             <span className="rounded-full bg-white/70 px-2.5 py-0.5 text-sm tabular-nums">{groupRows.length}</span>
           </summary>
+          {!group.verified && <p className="border-t border-current/15 px-4 pb-2 text-xs">Pending and reviewed outcomes are together here; each benefit keeps its own status.</p>}
           <div className="space-y-3 border-t border-current/15 p-3">
-            {groupRows.map((row) => <Card key={row.benefit_id}><CardContent className="p-5">
-              <div className="mb-3 flex flex-wrap justify-between gap-2"><strong>{row.plan_name} · {row.category.replace(/_/g, " ")}</strong><span className="text-xs text-muted-foreground">{row.original_filename} · {row.source_section || "Section unavailable"}{row.page_number ? ` · page ${row.page_number}` : ""} · {row.corpus_status}</span></div>
-              <form onSubmit={(event) => { event.preventDefault(); void save(row, event.currentTarget); }} className="grid gap-3 lg:grid-cols-[1fr_1fr_180px_auto]">
+            {groupRows.map((row) => {
+              const badge = BENEFIT_STATUS_BADGES[row.verification_status] || { label: "Status unavailable", tone: "border-slate-300 bg-slate-100 text-slate-800" };
+              return <Card key={row.benefit_id}><CardContent className="p-5">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><div className="flex flex-wrap items-center gap-2"><strong>{row.plan_name} · {row.category.replace(/_/g, " ")}</strong><span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${badge.tone}`}>{badge.label}</span></div><span className="text-xs text-muted-foreground">{row.original_filename} · {row.source_section || "Section unavailable"}{row.page_number ? ` · page ${row.page_number}` : ""} · {row.corpus_status}</span></div>
+              <form onSubmit={(event) => event.preventDefault()} className="grid gap-3 lg:grid-cols-[1fr_1fr_180px_auto]">
                 <label className="field-label">Source wording / corrected value<textarea className="text-input min-h-20" name="value_text" defaultValue={row.value_text || ""} /></label>
                 <label className="field-label">Confirmed benefit section<input className="text-input" name="source_section" maxLength={240} defaultValue={row.source_section_verified ? row.source_section || "" : ""} /></label>
                 <label className="field-label">Dimensions (JSON)<textarea className="text-input min-h-20 font-mono text-xs" name="dimensions" defaultValue={JSON.stringify(row.dimensions || {}, null, 2)} /></label>
-                <label className="field-label">Review status<select className="text-input" name="verification_status" defaultValue={row.verification_status}><option value="pending_review">Pending review</option><option value="verified">Verified</option><option value="missing">Missing</option><option value="ambiguous">Ambiguous</option><option value="conflicting">Conflicting</option></select></label>
-                <div className="self-end"><Button type="submit" disabled={busy}>Save review</Button></div>
+                <div className="flex flex-wrap items-end gap-2">
+                  {row.verification_status === "verified"
+                    ? <Button type="button" variant="outline" className="border-slate-400" disabled={busy} onClick={(event) => { const form = event.currentTarget.form; if (form) void save(row, form, "pending_review"); }}>× Unverify</Button>
+                    : <Button type="button" className="border-emerald-700 bg-emerald-700 text-white hover:bg-emerald-800 hover:text-white" disabled={busy} onClick={(event) => { const form = event.currentTarget.form; if (form) void save(row, form, "verified"); }}>✓ Verify</Button>}
+                </div>
               </form>
-            </CardContent></Card>)}
+              </CardContent></Card>;
+            })}
           </div>
         </details>;
       })}
