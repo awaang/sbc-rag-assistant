@@ -2,7 +2,7 @@ from contextlib import contextmanager
 
 from fastapi.testclient import TestClient
 
-from app.main import BenefitReview, app, database_connection, require_user, review_benefit
+from app.main import BenefitReview, DocumentReview, app, database_connection, require_user, review_benefit, review_document
 from fastapi import HTTPException
 import pytest
 
@@ -67,3 +67,15 @@ def test_verifying_benefit_requires_confirmed_section():
         review_benefit(1, BenefitReview(verification_status="verified", value_text="Deductible: $500"),
                        {"uid": "admin-uid"}, FakeConnection())
     assert error.value.status_code == 422
+
+
+def test_explicit_document_verification_requires_completed_processing():
+    class IncompleteConnection:
+        def execute(self, sql, _params=None):
+            assert "processing_stages->>'embedding'" in sql
+            return FakeResult(None)
+
+    with pytest.raises(HTTPException) as error:
+        review_document(12, DocumentReview(review_status="approved"),
+                        {"uid": "admin-uid"}, IncompleteConnection())
+    assert error.value.status_code == 409

@@ -10,6 +10,7 @@ import re
 import psycopg
 from dotenv import load_dotenv
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 from app.ingestion import build_chunks, parse_pdf
 
@@ -28,15 +29,31 @@ def _section_heading(text: str) -> str | None:
 
 def ingest_document(connection: psycopg.Connection, document: dict) -> dict:
     document_id = document["document_id"]
-    connection.execute("UPDATE documents SET review_status = 'processing', ingestion_error = NULL WHERE document_id = %s", (document_id,))
+    connection.execute("""UPDATE documents SET review_status = 'processing', ingestion_error = NULL,
+                       processing_stages = %s, processing_warnings = '[]'::jsonb
+                       WHERE document_id = %s""",
+                       (Jsonb({"parsing": "running", "chunking": "pending",
+                               "benefit_extraction": "pending", "embedding": "pending"}), document_id))
     connection.commit()
     try:
         pages = parse_pdf(bytes(document["pdf_bytes"]))
         chunks = build_chunks(pages)
         issues = []
         for page in pages:
+            if page.get("parse_error"):
+                issues.append(page["parse_error"])
+            if page.get("table_error"):
+                issues.append(page["table_error"])
             if not page["text"].strip() and not page["tables"]:
                 issues.append(f"Page {page['page_number']} contains no extractable text or tables (possibly scanned).")
+        usable_text = sum(len(re.findall(r"[A-Za-z0-9]", page["text"] + " ".join(
+            str(cell or "") for table in page["tables"] for row in table.get("rows", []) for cell in row)))
+            for page in pages)
+        critical = ("Essentially no usable text was extracted." if usable_text < 50 else
+                    "Both chunk strategies need usable evidence." if any(not group for group in chunks.values()) else None)
+        stages = {"parsing": "completed" if not critical else "failed",
+                  "chunking": "completed" if not critical else "failed",
+                  "benefit_extraction": "pending", "embedding": "pending"}
         with connection.transaction():
             connection.execute("DELETE FROM benefit_records WHERE document_id = %s", (document_id,))
             connection.execute("DELETE FROM chunks WHERE document_id = %s", (document_id,))
@@ -53,7 +70,7 @@ def ingest_document(connection: psycopg.Connection, document: dict) -> dict:
                          tables_json = EXCLUDED.tables_json,
                          parse_status = EXCLUDED.parse_status""",
                     (document_id, page["page_number"], _section_heading(page["text"]), page["text"],
-                     psycopg.types.json.Jsonb(page["tables"]), "parsed" if readable else "needs_review"),
+                     Jsonb(page["tables"]), "failed" if page.get("parse_error") else "parsed" if readable else "needs_review"),
                 )
             for strategy, strategy_chunks in chunks.items():
                 for chunk in strategy_chunks:
@@ -62,21 +79,25 @@ def ingest_document(connection: psycopg.Connection, document: dict) -> dict:
                            (document_id, chunk_strategy, strategy_version, chunk_text, page_start, page_end, provenance)
                            VALUES (%s,%s,1,%s,%s,%s,%s)""",
                         (document_id, strategy, chunk["text"], chunk["page_start"], chunk["page_end"],
-                         psycopg.types.json.Jsonb(chunk["provenance"])),
+                         Jsonb(chunk["provenance"])),
                     )
             connection.execute(
-                """UPDATE documents SET review_status = 'needs_review', ingestion_error = %s
-                   WHERE document_id = %s""",
-                ("\n".join(issues) or None, document_id),
+                """UPDATE documents SET review_status = %s, ingestion_error = %s,
+                   processing_stages = %s, processing_warnings = %s WHERE document_id = %s""",
+                ("failed" if critical else "needs_review", critical,
+                 Jsonb(stages), Jsonb(issues), document_id),
             )
         return {"document_id": document_id, "pages": len(pages),
                 "fixed_size_chunks": len(chunks["fixed_size"]),
-                "section_aware_chunks": len(chunks["section_aware"]), "issues": issues}
+                "section_aware_chunks": len(chunks["section_aware"]), "issues": issues,
+                "error": critical}
     except Exception as exc:
         message = f"{type(exc).__name__}: {exc}"[:2000]
         connection.execute(
-            "UPDATE documents SET review_status = 'needs_review', ingestion_error = %s WHERE document_id = %s",
-            (message, document_id),
+            """UPDATE documents SET review_status = 'failed', ingestion_error = %s,
+               processing_stages = %s WHERE document_id = %s""",
+            (message, Jsonb({"parsing": "failed", "chunking": "pending",
+                             "benefit_extraction": "pending", "embedding": "pending"}), document_id),
         )
         connection.commit()
         return {"document_id": document_id, "error": message}
@@ -84,7 +105,7 @@ def ingest_document(connection: psycopg.Connection, document: dict) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Ingest uploaded documents from Neon.")
-    parser.add_argument("--reprocess-id", type=int, help="Reparse one reviewed document and require approval again.")
+    parser.add_argument("--reprocess-id", type=int, help="Reparse one document for maintenance.")
     args = parser.parse_args()
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
@@ -98,7 +119,8 @@ def main() -> None:
         else:
             pending = connection.execute(
                 """SELECT document_id, pdf_bytes FROM documents
-                   WHERE document_id = %s AND review_status IN ('approved', 'needs_review')""",
+                   WHERE document_id = %s AND review_status IN
+                     ('approved', 'ready', 'ready_with_warnings', 'needs_review', 'failed')""",
                 (args.reprocess_id,),
             ).fetchall()
         if not pending:

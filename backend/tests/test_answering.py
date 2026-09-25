@@ -39,13 +39,13 @@ def test_explicit_coverage_type_limits_across_plan_comparison(monkeypatch):
     assert result["context_plan_ids"] == [1, 2]
 
 
-def test_unresolved_candidate_and_unconfirmed_section_block_numeric_answer(monkeypatch):
+def test_conflicting_candidate_and_unconfirmed_reviewed_section_block_numeric_answer(monkeypatch):
     monkeypatch.setattr(answering, "_approved_plans", lambda _connection: MEDICAL[:1])
     monkeypatch.setattr(answering, "_benefits", lambda *_args: [
         benefit(1, "$500"), benefit(1, "$750", "pending_review")])
     result = answering.answer_question(None, "What is the Alpha Basic deductible?")
     assert result["status"] == "insufficient_evidence"
-    assert "unresolved" in result["answer"]
+    assert "conflicting" in result["answer"]
 
     monkeypatch.setattr(answering, "_benefits", lambda *_args: [benefit(1, "$500", section_verified=False)])
     result = answering.answer_question(None, "What is the Alpha Basic deductible?")
@@ -61,7 +61,31 @@ def test_unresolved_candidate_with_unknown_context_blocks_qualified_answer(monke
     result = answering.answer_question(None, "What is the Alpha Basic in-network deductible?")
 
     assert result["status"] == "insufficient_evidence"
-    assert "unresolved" in result["answer"]
+    assert "conflicting" in result["answer"]
+
+
+def test_unambiguous_automatic_candidate_answers_with_citation(monkeypatch):
+    monkeypatch.setattr(answering, "_approved_plans", lambda _connection: MEDICAL[:1])
+    row = benefit(1, "$500", "pending_review", section_verified=False)
+    row["reviewed_at"] = None
+    monkeypatch.setattr(answering, "_benefits", lambda *_args: [row])
+
+    result = answering.answer_question(None, "What is the Alpha Basic in-network deductible?")
+
+    assert result["status"] == "answered"
+    assert result["citations"][0]["page"] == 2
+    assert result["citations"][0]["section"] == "Plan costs"
+
+
+def test_ambiguous_candidate_blocks_only_matching_context(monkeypatch):
+    monkeypatch.setattr(answering, "_approved_plans", lambda _connection: MEDICAL[:1])
+    supported = benefit(1, "$500", "pending_review")
+    ambiguous = benefit(1, "$700 or $900", "ambiguous")
+    ambiguous["dimensions"] = {"network": "out-of-network"}
+    monkeypatch.setattr(answering, "_benefits", lambda *_args: [supported, ambiguous])
+
+    assert answering.answer_question(None, "What is the Alpha Basic in-network deductible?")["status"] == "answered"
+    assert answering.answer_question(None, "What is the Alpha Basic out-of-network deductible?")["status"] == "insufficient_evidence"
 
 
 def test_unresolved_candidate_in_a_known_different_context_does_not_block(monkeypatch):

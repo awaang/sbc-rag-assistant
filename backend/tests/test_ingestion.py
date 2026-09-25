@@ -68,6 +68,30 @@ def test_parse_pdf_rejects_malformed_input():
         parse_pdf(b"not a PDF")
 
 
+def test_isolated_page_failure_keeps_later_usable_evidence(monkeypatch):
+    class BrokenPage:
+        def extract_text(self):
+            raise ValueError("bad text stream")
+
+    class GoodPage:
+        def extract_text(self):
+            return "PLAN COSTS\nThe annual deductible is $500 for each individual."
+
+        def extract_tables(self):
+            raise ValueError("table detector failed")
+
+    @contextmanager
+    def fake_pdf(_bytes):
+        yield type("PDF", (), {"pages": [BrokenPage(), GoodPage()]})()
+
+    monkeypatch.setattr(ingestion.pdfplumber, "open", fake_pdf)
+    pages = parse_pdf(b"%PDF-test")
+
+    assert "parse_error" in pages[0]
+    assert "table_error" in pages[1]
+    assert build_chunks(pages)["section_aware"]
+
+
 def test_parse_keeps_rows_before_and_at_a_later_header(monkeypatch):
     class Page:
         def extract_text(self):

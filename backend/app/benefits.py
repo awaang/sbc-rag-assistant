@@ -155,10 +155,15 @@ def _table_candidate_rows(page: dict) -> list[BenefitCandidate]:
                         wording += f" {dimensions[scope]}"
                     if period:
                         wording += f" (per {period})"
+                    detected_section = (row_sections[row_number - 1] if row_number <= len(row_sections) else None)
+                    detected_section = detected_section or page.get("section_heading")
+                    if not detected_section:
+                        context_headers = [value for value in row_headers or headers if value.strip() and
+                                           not re.fullmatch(r"(?:in|out)[- ]of[- ]network|in[- ]network", value.strip(), re.I)]
+                        detected_section = " | ".join(context_headers)[:240] or None
                     row_candidates.append(BenefitCandidate(
                         category=category, value_text=wording, page_number=page_number,
-                        section=row_sections[row_number - 1] if row_number <= len(row_sections)
-                        else page.get("section_heading"),
+                        section=detected_section,
                         dimensions=dimensions,
                         status="pending_review"))
             # Remove repeated OCR/table cells while keeping same amounts that
@@ -167,7 +172,11 @@ def _table_candidate_rows(page: dict) -> list[BenefitCandidate]:
             for candidate in row_candidates:
                 key = (candidate.category, candidate.value_text.casefold(), tuple(sorted(candidate.dimensions.items())))
                 unique[key] = candidate
-            table_candidates.extend(unique.values())
+            grouped = list(unique.values())
+            for candidate in grouped:
+                same_context = [other for other in grouped
+                                if other.category == candidate.category and other.dimensions == candidate.dimensions]
+                table_candidates.append(replace(candidate, status="ambiguous") if len(same_context) > 1 else candidate)
             if found_category and not row_candidates and len(row_text) > 100:
                 active_category = None
                 active_label = ""
@@ -177,7 +186,7 @@ def _table_candidate_rows(page: dict) -> list[BenefitCandidate]:
 
 
 def extract_candidates(pages: list[dict]) -> list[BenefitCandidate]:
-    """Find source lines worth human review; never promote these to verified facts.
+    """Find candidates with source wording, context, and provenance.
 
     Each page must contain ``page_number`` and ``text``; ``section_heading`` is
     optional. The source wording is preserved, and rows with multiple plausible

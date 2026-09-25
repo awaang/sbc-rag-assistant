@@ -31,9 +31,9 @@ Users must authenticate before accessing the question-answering application. Fir
 - Extract key numerical benefit details into a structured per-plan schema to support reliable lookups and comparisons.
 - Evaluate the system with approximately 20–30 questions with known correct answers, measuring answer accuracy and latency per query. Token usage is deferred until the optional Gemini phrasing phase is enabled; deterministic answers have no model-token usage to report.
 - Document implementation decisions, chunking tradeoffs, retrieval results, extraction accuracy, and what would change with a real budget.
-- **Initial implementation:** use deterministic answer formatting for verified facts, comparisons, citations, clarification, and abstention. Do not integrate or call Gemini in the initial implementation.
+- **Initial implementation:** use deterministic answer formatting for supported facts, comparisons, citations, clarification, and abstention. Do not integrate or call Gemini in the initial implementation.
 - **Later phase:** Gemini may be added only after the deterministic evidence-grounded answer path is implemented and evaluated, and only as an optional final phrasing step over already validated evidence. It must not select facts, fill gaps, alter citations, or override abstention. Its availability/free-tier status is not a prerequisite for the initial demo.
-- Provide actual admin PDF uploads and review controls. Uploads are stored durably; a local admin ingestion command processes them and results remain unavailable to answers until reviewed and approved.
+- Provide actual admin PDF uploads and review controls. Uploads are stored durably; one local pipeline command parses, chunks, extracts benefits, embeds chunks, and assesses readiness. Routine queryability does not require document approval or per-benefit confirmation.
 - Target a fully free, no-credit-card local/deployed demo using Firebase Spark, Neon Free, and Render Free, subject to current provider limits and account verification. Free-tier cold starts and quotas are acceptable limitations and must be documented.
 - Show basic evidence-path/citation diagnostics to all users and detailed retrieval, parsing, extraction, and ingestion diagnostics to admins.
 
@@ -53,6 +53,8 @@ Users must authenticate before accessing the question-answering application. Fir
    - Parse the provisional source documents with attention to table structure; evaluate PDF parsing approaches such as pdfplumber or Camelot.
    - Preserve benefit rows and their context during chunking; a table row must not be split across chunks.
    - Explore fixed-size and semantic chunking and document the selected strategy and its tradeoffs.
+   - Record parsing, chunking, benefit extraction, and embedding stages. `ready` and `ready_with_warnings` require all stages to complete and enough current embeddings for retrieval. Processing, incomplete, and critically failed documents remain unavailable. Preserve previously approved documents as queryable.
+   - Treat an isolated page parse failure, one ambiguous benefit, or a table extraction failure as a warning when other usable evidence remains. An unreadable PDF, essentially no usable text, unknown plan identity, processing crash, or insufficient embeddings is critical. A completed command alone does not establish readiness.
 
 2. **Retrieval**
    - Provide keyword retrieval using BM25.
@@ -65,6 +67,7 @@ Users must authenticate before accessing the question-answering application. Fir
    - Extract key numerical benefit details from the provisional source documents into a clean schema organized by plan. The initial fields are deductible, emergency room cost sharing, copays, and out-of-pocket maximum; additional coverage is **TBD**.
    - Store each extracted value with its plan identity and source document, page, and section when available.
    - Use structured extracted data for numerical questions such as deductibles, copays, and out-of-pocket maximums, rather than relying on semantic retrieval alone.
+   - Allow unambiguous automatically extracted candidates to support numerical answers when value, requested context, page, and detected section are usable. Optional admin correction and explicit verification remain available.
    - Record extraction accuracy against verified values in the evaluation set.
    - Exact schema fields and extraction coverage beyond the example benefit types are **TBD**.
 
@@ -72,9 +75,10 @@ Users must authenticate before accessing the question-answering application. Fir
    - Accept natural-language questions about a plan or comparisons across plans.
    - Initial implementation produces answers from retrieved evidence and structured extracted data using deterministic formatting; Gemini is excluded from this phase.
    - In a later phase, Gemini may optionally phrase an already validated answer. The evidence gate, facts, citations, and abstention decision remain application-controlled.
-   - Cite the source plan and relevant SBC section in every answer; include the page when available.
+   - Cite the source plan and relevant document section in every answer; include the page when available.
    - When confidence is low or supporting evidence is missing, say that the answer cannot be established from the available documents instead of guessing.
    - The initial abstention rule is evidence-based: do not provide a requested value if the structured record or retrieved source does not support it with a traceable citation. Numeric confidence thresholds are **TBD** pending evaluation.
+   - A warning affecting one part of a document must not suppress independent supported answers. Clarify or abstain when the requested value depends on missing, ambiguous, conflicting, or untraceable evidence.
 
 5. **Evaluation and documentation**
    - Maintain an evaluation set of approximately 20–30 questions with correct answers.
@@ -90,14 +94,14 @@ Users must authenticate before accessing the question-answering application. Fir
 7. **User interface**
    - Provide a simple interface for authentication, question submission, answers or abstentions, and citations. Visual polish and additional UI features are out of scope.
    - Present a multi-turn, ChatGPT-style conversation in the chat page. Keep the active conversation transcript in browser memory only; clear it when the user starts a new chat, signs out, or reloads/closes the page. Do not persist ordinary chat messages to the backend or browser storage.
-   - Provide real admin PDF upload, processing status, parsed evidence/extraction review, and approval controls. The local ingestion command performs PDF parsing and embedding generation to stay within free-host resource limits.
+   - Provide real admin PDF upload, per-stage processing status and warnings, parsed evidence/extraction review, and optional verification controls. The local pipeline runs parsing and embedding on the maintainer's machine.
    - Show basic diagnostics to all users and advanced diagnostics only to admins.
    - Provide an admin-only evaluation playground to select BM25 or semantic search and fixed-size or semantic/section-aware chunks. Detailed rank and score traces remain admin-only.
 
 ## Non-functional requirements
 
-- **Answer correctness:** Numerical answers must be grounded in the parsed SBC or verified structured extraction; the system must avoid unsupported values.
-- **Traceability:** Each answer must let a user identify its source plan and SBC section.
+- **Answer correctness:** Numerical answers must be grounded in unambiguous, cited source extraction or explicit verification; the system must avoid unsupported values.
+- **Traceability:** Each answer must let a user identify its source plan and document section.
 - **Table fidelity:** Parsing and chunking must preserve table rows and the context needed to interpret benefit values.
 - **Local retrieval:** Semantic embeddings must be generated locally without requiring an embedding API.
 - **Evaluation visibility:** Retrieval quality, answer accuracy, extraction accuracy, and latency must be measurable on the evaluation set. Token usage is measured only if optional Gemini phrasing is enabled. Numeric pass thresholds are **TBD**; report baseline measurements.
@@ -118,12 +122,12 @@ Users must authenticate before accessing the question-answering application. Fir
 - [ ] Deductible, ER cost sharing, copay, and out-of-pocket maximum values are extracted into a per-plan structured representation with traceable source references, and extraction accuracy is measured against verified values.
 - [ ] The tool can answer supported single-plan and cross-plan questions, including numerical benefit questions.
 - [ ] The chat UI shows a multi-turn conversation during the active page session and clears the transcript on new chat, sign-out, and reload; ordinary messages are not persisted.
-- [ ] Every generated answer cites its source plan and SBC section, with page when available.
+- [ ] Every generated answer cites its source plan and document section, with page when available.
 - [ ] For low-confidence or unsupported questions, the tool reports insufficient evidence rather than guessing.
 - [ ] Per-query accuracy and latency are measured. Token usage is measured only if optional Gemini phrasing is enabled.
 - [ ] Initial answer flow is complete and evaluated without Gemini; any later Gemini integration is a separate phase and cannot weaken evidence, citation, or abstention behavior.
 - [ ] The README explains chunking decisions, BM25 versus semantic retrieval results, extraction accuracy, and what would be done differently with a real budget.
 - [ ] Unauthenticated requests are rejected by the application server; authenticated users can access the question-answering flow.
-- [ ] Admin uploads are durable; local ingestion, review, and approval gating work end to end, and non-admin users cannot invoke admin operations.
+- [ ] Admin uploads are durable; local pipeline readiness and warning handling work end to end without mandatory approval, and non-admin users cannot invoke admin operations.
 - [ ] Basic diagnostics are available to all users and advanced diagnostics only to admins.
 - [ ] The application runs locally and is deployed on no-card free tiers with cold-start/quota limitations documented.

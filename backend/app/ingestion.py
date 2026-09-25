@@ -108,13 +108,27 @@ def parse_pdf(pdf_bytes: bytes) -> list[dict[str, Any]]:
     parsed: list[dict[str, Any]] = []
     with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
         for page_number, page in enumerate(pdf.pages, 1):
-            raw_text = page.extract_text() or ""
+            try:
+                raw_text = page.extract_text() or ""
+            except Exception as exc:
+                parsed.append({"page_number": page_number, "text": "", "tables": [],
+                               "parse_error": f"Page {page_number} text extraction failed: {type(exc).__name__}: {exc}"[:500]})
+                continue
             tables = []
-            found_tables = page.find_tables() if hasattr(page, "find_tables") else None
-            source_tables = found_tables if found_tables is not None else (page.extract_tables() or [])
+            table_error = None
+            try:
+                found_tables = page.find_tables() if hasattr(page, "find_tables") else None
+                source_tables = found_tables if found_tables is not None else (page.extract_tables() or [])
+            except Exception as exc:
+                found_tables, source_tables = None, []
+                table_error = f"Page {page_number} table extraction failed: {type(exc).__name__}: {exc}"[:500]
             for source_table in source_tables:
-                raw_table = source_table.extract() if found_tables is not None else source_table
-                rows = [[_clean_cell(cell) for cell in row] for row in raw_table]
+                try:
+                    raw_table = source_table.extract() if found_tables is not None else source_table
+                    rows = [[_clean_cell(cell) for cell in row] for row in raw_table]
+                except Exception as exc:
+                    table_error = f"Page {page_number} table extraction failed: {type(exc).__name__}: {exc}"[:500]
+                    continue
                 kept = [(index, row) for index, row in enumerate(rows) if any(row)]
                 rows = [row for _, row in kept]
                 if not rows:
@@ -133,12 +147,17 @@ def parse_pdf(pdf_bytes: bytes) -> list[dict[str, Any]]:
                 tables.append(table)
             text_lines = None
             if hasattr(page, "extract_text_lines"):
-                text_lines = [{"text": line["text"], "x0": line["x0"], "x1": line["x1"],
-                               "top": line["top"], "bottom": line["bottom"]}
-                              for line in page.extract_text_lines()]
-                if not text_lines and raw_text.strip():
+                try:
+                    text_lines = [{"text": line["text"], "x0": line["x0"], "x1": line["x1"],
+                                   "top": line["top"], "bottom": line["bottom"]}
+                                  for line in page.extract_text_lines()]
+                    if not text_lines and raw_text.strip():
+                        text_lines = None
+                except Exception:
                     text_lines = None
             record = {"page_number": page_number, "text": raw_text, "tables": tables}
+            if table_error:
+                record["table_error"] = table_error
             if text_lines is not None:
                 record["text_lines"] = text_lines
             row_sections = {(unit.provenance["table_number"], unit.provenance["row_number"]): unit.section

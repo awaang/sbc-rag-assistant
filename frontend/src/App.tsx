@@ -236,10 +236,11 @@ type BenefitRow = {
   dimensions: Record<string, string>; page_number: number | null;
   source_section: string | null; source_section_verified: boolean; verification_status: string;
 };
-type BenefitVerificationStatus = "pending_review" | "verified";
+type BenefitVerificationStatus = "pending_review" | "verified" | "missing" | "ambiguous" | "conflicting";
 type ManagedDocument = {
   document_id: number; original_filename: string; source_url: string | null;
   corpus_status: string; review_status: string; ingestion_error: string | null;
+  processing_stages: Record<string, string>; processing_warnings: string[];
   plan_name: string | null; insurer: string | null; plan_type: string;
   coverage_type: string; plan_year: number | null; parsed_pages: number;
 };
@@ -257,7 +258,7 @@ const BENEFIT_STATUS_BADGES: Record<string, { label: string; tone: string }> = {
   verified: { label: "Verified", tone: "border-emerald-300 bg-emerald-50 text-emerald-900" },
 };
 const BENEFIT_STATUS_GUIDE = [
-  { status: "pending_review", description: "A candidate was extracted, but no reviewer has confirmed it against the PDF yet." },
+  { status: "pending_review", description: "Automatically extracted. It can support an answer when its value, context, page, and section are unambiguous; verification is optional." },
   { status: "missing", description: "Review found no usable value for this benefit in the source. Don’t fill the gap by guessing." },
   { status: "ambiguous", description: "The value or its context is unclear. Extraction may flag multiple distinct values on a source line; check the PDF to determine what each amount means." },
   { status: "conflicting", description: "Evidence or candidate records disagree about the value. Reconcile the source evidence before relying on it." },
@@ -311,7 +312,7 @@ function BenefitsReviewPage({ user }: { user: User }) {
     finally { setBusy(false); }
   }
   return <div className="content-page">
-    <PageHeading eyebrow="ADMIN WORKSPACE" title="Benefit extraction review" description="Check each value and its relevant source section against the PDF before marking it verified. Candidate-derived records do not qualify a document as an SBC." />
+    <PageHeading eyebrow="ADMIN WORKSPACE" title="Benefit extraction review" description="Inspect detected sections and correct or verify values when needed. Automatically extracted values can support cited answers." />
     {error && <p role="alert" className="chat-error">{error}</p>}{message && <p role="status">{message}</p>}
     <Card><CardContent className="p-5"><h2 className="font-semibold">Parsed documents</h2><p className="text-sm text-muted-foreground">Extraction requires Phase 2 parsed pages and a linked plan.</p>
       {documents.map((doc) => <div className="flex flex-wrap items-center justify-between gap-3 border-b py-3" key={doc.document_id}><span>{doc.plan_name || doc.original_filename} · {doc.parsed_pages} pages · {doc.corpus_status}</span><Button disabled={busy || !doc.parsed_pages} onClick={() => void extract(doc.document_id)}>Extract candidates</Button></div>)}
@@ -319,7 +320,7 @@ function BenefitsReviewPage({ user }: { user: User }) {
     </CardContent></Card>
     <Card className="mt-5"><CardContent className="p-5">
       <h2 className="font-semibold">Review status guide</h2>
-      <p className="mb-4 mt-1 text-sm text-muted-foreground">Statuses describe extraction and review progress. Only verified values can support numerical answers; the source still needs to match the question.</p>
+      <p className="mb-4 mt-1 text-sm text-muted-foreground">Unambiguous candidates with page and section citations can support answers. Correct ambiguous or inaccurate candidates here.</p>
       <div className="grid gap-3 sm:grid-cols-2">
         {BENEFIT_STATUS_GUIDE.map((item) => <div key={item.status} className="rounded-lg border border-border p-3">
           <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${BENEFIT_STATUS_BADGES[item.status].tone}`}>{BENEFIT_STATUS_BADGES[item.status].label}</span>
@@ -344,9 +345,11 @@ function BenefitsReviewPage({ user }: { user: User }) {
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><div className="flex flex-wrap items-center gap-2"><strong>{row.plan_name} · {row.category.replace(/_/g, " ")}</strong><span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${badge.tone}`}>{badge.label}</span></div><span className="text-xs text-muted-foreground">{row.original_filename} · {row.source_section || "Section unavailable"}{row.page_number ? ` · page ${row.page_number}` : ""} · {row.corpus_status}</span></div>
               <form onSubmit={(event) => event.preventDefault()} className="grid gap-3 lg:grid-cols-[1fr_1fr_180px_auto]">
                 <label className="field-label">Source wording / corrected value<textarea className="text-input min-h-20" name="value_text" defaultValue={row.value_text || ""} /></label>
-                <label className="field-label">Confirmed benefit section<input className="text-input" name="source_section" maxLength={240} defaultValue={row.source_section_verified ? row.source_section || "" : ""} /></label>
+                <label className="field-label">Detected / corrected benefit section<input className="text-input" name="source_section" maxLength={240} defaultValue={row.source_section || ""} /></label>
                 <label className="field-label">Dimensions (JSON)<textarea className="text-input min-h-20 font-mono text-xs" name="dimensions" defaultValue={JSON.stringify(row.dimensions || {}, null, 2)} /></label>
                 <div className="flex flex-wrap items-end gap-2">
+                  <label className="field-label">Review outcome<select className="text-input" name="review_status" defaultValue={row.verification_status === "verified" ? "pending_review" : row.verification_status}><option value="pending_review">Corrected candidate</option><option value="missing">Missing</option><option value="ambiguous">Ambiguous</option><option value="conflicting">Conflicting</option></select></label>
+                  <Button type="button" variant="outline" disabled={busy} onClick={(event) => { const form = event.currentTarget.form; if (form) void save(row, form, (new FormData(form).get("review_status") || "pending_review") as BenefitVerificationStatus); }}>Save correction</Button>
                   {row.verification_status === "verified"
                     ? <Button type="button" variant="outline" className="border-slate-400" disabled={busy} onClick={(event) => { const form = event.currentTarget.form; if (form) void save(row, form, "pending_review"); }}>× Unverify</Button>
                     : <Button type="button" className="border-emerald-700 bg-emerald-700 text-white hover:bg-emerald-800 hover:text-white" disabled={busy} onClick={(event) => { const form = event.currentTarget.form; if (form) void save(row, form, "verified"); }}>✓ Verify</Button>}
@@ -384,7 +387,7 @@ function DocumentsPage({ user }: { user: User }) {
   useEffect(() => { void refresh(); }, [user.uid]);
   async function upload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const formElement = event.currentTarget; setBusy(true); setError(""); setNotice("");
-    try { const form = new FormData(formElement); if (!form.get("plan_year")) form.delete("plan_year"); await api("/api/admin/documents", { method: "POST", body: form }); formElement.reset(); setNotice("PDF uploaded to durable storage as an unverified candidate. Run the local ingestion command to parse it."); await refresh(); }
+    try { const form = new FormData(formElement); if (!form.get("plan_year")) form.delete("plan_year"); await api("/api/admin/documents", { method: "POST", body: form }); formElement.reset(); setNotice("PDF uploaded as an unverified candidate. Run python -m app.pipeline locally to process it."); await refresh(); }
     catch (e) { setError(e instanceof Error ? e.message : "Upload failed."); }
     finally { setBusy(false); }
   }
@@ -401,14 +404,14 @@ function DocumentsPage({ user }: { user: User }) {
   }
   async function retry(documentId: number) {
     setBusy(true); setError(""); setNotice("");
-    try { await api(`/api/admin/documents/${documentId}/retry`, { method: "POST" }); setNotice("Document returned to the upload queue. Run the local ingestion command again."); await refresh(); }
+    try { await api(`/api/admin/documents/${documentId}/retry`, { method: "POST" }); setNotice("Document returned to the upload queue. Run python -m app.pipeline again."); await refresh(); }
     catch (e) { setError(e instanceof Error ? e.message : "Could not queue document."); }
     finally { setBusy(false); }
   }
   return <div className="content-page">
-    <PageHeading eyebrow="ADMIN WORKSPACE" title="Source documents" description="Upload PDFs, run local ingestion, inspect parsed pages and chunks, then record document review. Review approval does not establish SBC eligibility." />
+    <PageHeading eyebrow="ADMIN WORKSPACE" title="Source documents" description="Upload PDFs, run the local pipeline, and inspect readiness, stages, warnings, pages, and chunks. Verification is optional and does not establish SBC eligibility." />
     {error && <p role="alert" className="chat-error">{error}</p>}{notice && <p role="status">{notice}</p>}
-    <Card><CardContent className="p-5"><h2 className="font-semibold">Upload a plan PDF</h2><p className="mb-4 text-sm text-muted-foreground">Uploads are stored in Neon. Parsing runs locally with <code>python -m app.ingest</code>. Maximum file size: 15 MB.</p>
+    <Card><CardContent className="p-5"><h2 className="font-semibold">Upload a plan PDF</h2><p className="mb-4 text-sm text-muted-foreground">Uploads are stored in Neon. Run <code>python -m app.pipeline</code> locally to process them. Maximum file size: 15 MB.</p>
       <form onSubmit={upload} className="grid gap-3 sm:grid-cols-2">
         <label className="field-label">PDF file<input className="text-input" type="file" name="file" accept="application/pdf,.pdf" required /></label>
         <label className="field-label">Insurer<input className="text-input" name="insurer" maxLength={120} required /></label>
@@ -420,11 +423,11 @@ function DocumentsPage({ user }: { user: User }) {
         <div><Button type="submit" disabled={busy}>{busy ? "Uploading…" : "Upload candidate PDF"}</Button></div>
       </form>
     </CardContent></Card>
-    <Card className="mt-5"><CardContent className="p-5"><h2 className="font-semibold">Ingestion and review queue</h2><p className="mb-3 text-sm text-muted-foreground">After upload, run the CLI above on a machine with database access. Successful parses move to needs review.</p>
-      {documents.map((doc) => <div className="border-b py-4" key={doc.document_id}><div className="flex flex-wrap items-start justify-between gap-3"><div><strong>{doc.plan_name || doc.original_filename}</strong><p className="text-sm text-muted-foreground">{doc.insurer} · {doc.plan_type?.toUpperCase()} · {doc.coverage_type} {doc.plan_year || ""} · {doc.parsed_pages} pages · {doc.review_status} · {doc.corpus_status}</p>{doc.ingestion_error && <p className="mt-1 text-sm text-amber-800">{doc.ingestion_error}</p>}</div><div className="flex gap-2"><Button variant="outline" onClick={() => void inspect(doc.document_id)}>Inspect</Button>{doc.review_status === "needs_review" && <>{doc.ingestion_error && <Button variant="outline" disabled={busy} onClick={() => void retry(doc.document_id)}>Retry ingestion</Button>}<Button variant="outline" disabled={busy} onClick={() => void review(doc.document_id, "rejected")}>Reject</Button><Button disabled={busy} onClick={() => void review(doc.document_id, "approved")}>Approve</Button></>}</div></div></div>)}
+    <Card className="mt-5"><CardContent className="p-5"><h2 className="font-semibold">Processing status</h2><p className="mb-3 text-sm text-muted-foreground">Ready documents can answer questions. Warnings affect only the evidence they describe. Failed documents need reprocessing.</p>
+      {documents.map((doc) => <div className="border-b py-4" key={doc.document_id}><div className="flex flex-wrap items-start justify-between gap-3"><div><strong>{doc.plan_name || doc.original_filename}</strong><p className="text-sm text-muted-foreground">{doc.insurer} · {doc.plan_type?.toUpperCase()} · {doc.coverage_type} {doc.plan_year || ""} · {doc.parsed_pages} pages · {doc.review_status} · {doc.corpus_status}</p><p className="mt-1 text-xs">Stages: {Object.entries(doc.processing_stages || {}).map(([stage, state]) => `${stage}: ${state}`).join(" · ") || "not started"}</p>{doc.processing_warnings?.map((warning, index) => <p key={index} className="mt-1 text-sm text-amber-800">Warning: {warning}</p>)}{doc.ingestion_error && <p className="mt-1 text-sm text-red-800">Failure: {doc.ingestion_error}</p>}</div><div className="flex gap-2"><Button variant="outline" onClick={() => void inspect(doc.document_id)}>Inspect</Button>{["failed", "needs_review"].includes(doc.review_status) && <Button variant="outline" disabled={busy} onClick={() => void retry(doc.document_id)}>Retry</Button>}{["ready", "ready_with_warnings", "approved"].includes(doc.review_status) && <Button variant="outline" disabled={busy} onClick={() => void review(doc.document_id, "rejected")}>Reject</Button>}{["ready", "ready_with_warnings", "rejected"].includes(doc.review_status) && doc.processing_stages?.embedding === "completed" && <Button disabled={busy} onClick={() => void review(doc.document_id, "approved")}>Verify</Button>}</div></div></div>)}
       {!documents.length && <p className="py-4 text-sm text-muted-foreground">No documents uploaded.</p>}
     </CardContent></Card>
-    {inspection && <Card className="mt-5"><CardContent className="p-5"><h2 className="font-semibold">Inspection: {inspection.document.original_filename}</h2><p className="mb-4 text-xs text-muted-foreground">{inspection.document.plan_name} · {inspection.document.corpus_status} · {inspection.document.review_status}</p>{inspection.pages.map((page: any) => <details className="border-t py-3" key={page.page_id}><summary className="cursor-pointer font-medium">Page {page.page_number} · {page.section_heading || "Section not detected"} · {page.parse_status}</summary><pre className="mt-2 whitespace-pre-wrap text-xs">{page.extracted_text || "No text extracted"}{page.tables_json?.length ? `\n\nTABLES\n${JSON.stringify(page.tables_json, null, 2)}` : ""}</pre></details>)}<details className="border-t py-3"><summary className="cursor-pointer font-medium">Chunks ({inspection.chunks.length})</summary>{inspection.chunks.map((chunk: any) => <details className="ml-3 border-t py-2" key={chunk.chunk_id}><summary>{chunk.chunk_strategy} · pages {chunk.page_start}–{chunk.page_end}</summary><pre className="whitespace-pre-wrap text-xs">{chunk.chunk_text}\n\n{JSON.stringify(chunk.provenance, null, 2)}</pre></details>)}</details></CardContent></Card>}
+    {inspection && <Card className="mt-5"><CardContent className="p-5"><h2 className="font-semibold">Inspection: {inspection.document.original_filename}</h2><p className="mb-4 text-xs text-muted-foreground">{inspection.document.plan_name} · {inspection.document.corpus_status} · {inspection.document.review_status}</p><p className="text-xs">Stages: {Object.entries(inspection.document.processing_stages || {}).map(([stage, state]) => `${stage}: ${state}`).join(" · ") || "not started"}</p>{inspection.document.processing_warnings?.map((warning: string, index: number) => <p key={index} className="text-sm text-amber-800">Warning: {warning}</p>)}{inspection.document.ingestion_error && <p className="text-sm text-red-800">Failure: {inspection.document.ingestion_error}</p>}{inspection.pages.map((page: any) => <details className="border-t py-3" key={page.page_id}><summary className="cursor-pointer font-medium">Page {page.page_number} · {page.section_heading || "Section not detected"} · {page.parse_status}</summary><pre className="mt-2 whitespace-pre-wrap text-xs">{page.extracted_text || "No text extracted"}{page.tables_json?.length ? `\n\nTABLES\n${JSON.stringify(page.tables_json, null, 2)}` : ""}</pre></details>)}<details className="border-t py-3"><summary className="cursor-pointer font-medium">Chunks ({inspection.chunks.length})</summary>{inspection.chunks.map((chunk: any) => <details className="ml-3 border-t py-2" key={chunk.chunk_id}><summary>{chunk.chunk_strategy} · pages {chunk.page_start}–{chunk.page_end}</summary><pre className="whitespace-pre-wrap text-xs">{chunk.chunk_text}\n\n{JSON.stringify(chunk.provenance, null, 2)}</pre></details>)}</details></CardContent></Card>}
   </div>;
 }
 
@@ -534,15 +537,15 @@ function PlansPage({ user, isAdmin }: { user: User; isAdmin: boolean }) {
   }, [user]);
   return (
     <div className="content-page">
-      <PageHeading eyebrow="PLAN LIBRARY" title="Plans" description="Reviewed documents available for provisional answers. SBC and public-source status remain unverified." />
+      <PageHeading eyebrow="PLAN LIBRARY" title="Plans" description="Ready documents available for provisional answers. SBC and public-source status remain unverified." />
       {error && <p role="alert" className="chat-error">{error}</p>}
       {loading ? <p>Loading plans…</p> : plans.length > 0 ? <div className="grid gap-3 md:grid-cols-2">{plans.map((plan) =>
-        <Card key={plan.plan_id}><CardContent className="p-5"><h2 className="font-semibold">{plan.insurer} {plan.plan_name}</h2><p className="mt-2 text-sm text-muted-foreground">{plan.coverage_type} · {plan.plan_type} · {plan.plan_year || "year unknown"}</p><p className="mt-2 text-xs text-muted-foreground">Approved for provisional use; SBC/public-source status unverified.</p></CardContent></Card>
+        <Card key={plan.plan_id}><CardContent className="p-5"><h2 className="font-semibold">{plan.insurer} {plan.plan_name}</h2><p className="mt-2 text-sm text-muted-foreground">{plan.coverage_type} · {plan.plan_type} · {plan.plan_year || "year unknown"}</p><p className="mt-2 text-xs text-muted-foreground">Available for provisional use; SBC/public-source status unverified.</p></CardContent></Card>
       )}</div> : <Card><CardContent className="empty-state">
         <div className="empty-mark"><Icon name="book" /></div>
-        <h2>No approved plans yet</h2>
-        <p>Plan details will appear here after source documents have been reviewed and approved.</p>
-        {isAdmin && <div className="admin-notice"><strong>Admin workspace</strong><span>Use Documents in the navigation to upload PDFs, run the local parser, and review parsed evidence.</span></div>}
+        <h2>No ready plans yet</h2>
+        <p>Plan details will appear here after source documents complete local processing.</p>
+        {isAdmin && <div className="admin-notice"><strong>Admin workspace</strong><span>Use Documents to upload PDFs, run the local pipeline, and inspect processing issues.</span></div>}
       </CardContent></Card>}
     </div>
   );

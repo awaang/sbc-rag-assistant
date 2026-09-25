@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from firebase_admin import auth, credentials
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 import psycopg
 from psycopg.rows import dict_row
 
@@ -148,8 +148,16 @@ class EvaluationQuestion(BaseModel):
     question: str
     question_type: str
     expected_answer: str
-    expected_document_ids: list[int] = Field(min_length=1)
+    expected_document_ids: list[int] = Field(default_factory=list)
+    expected_document_sha256s: list[str] = Field(default_factory=list)
     expected_pages: list[int] = Field(default_factory=list)
+    require_all_documents: bool = False
+
+    @model_validator(mode="after")
+    def require_document_label(self):
+        if not self.expected_document_ids and not self.expected_document_sha256s:
+            raise ValueError("Each evaluation question needs an expected document ID or source-file SHA-256.")
+        return self
 
 
 def run_retrieval(connection, request: RetrievalRequest) -> dict:
@@ -166,7 +174,7 @@ def run_retrieval(connection, request: RetrievalRequest) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if request.method == "semantic" and result.get("index_status") == "no_approved_embeddings":
-        result["index_status"] = "no_approved_embeddings; run python -m app.embed locally after document approval"
+        result["index_status"] = "no_approved_embeddings; run python -m app.pipeline locally"
     return result
 
 
@@ -236,7 +244,7 @@ def run_evaluation(
     readiness = connection.execute(
         """SELECT c.chunk_strategy, count(*) AS chunk_count
            FROM chunks c JOIN documents d USING (document_id)
-           WHERE d.review_status = 'approved' AND d.corpus_status <> 'ineligible'
+           WHERE d.review_status IN ('approved', 'ready', 'ready_with_warnings') AND d.corpus_status <> 'ineligible'
              AND c.strategy_version = %s
            GROUP BY c.chunk_strategy""", (strategy_version,)
     ).fetchall()
@@ -258,7 +266,7 @@ def run_evaluation(
                FROM chunks c JOIN documents d USING (document_id)
                LEFT JOIN chunk_embeddings e ON e.chunk_id = c.chunk_id
                  AND e.model_name = %s AND e.model_version = %s AND e.model_fingerprint = %s
-               WHERE d.review_status = 'approved' AND d.corpus_status <> 'ineligible'
+               WHERE d.review_status IN ('approved', 'ready', 'ready_with_warnings') AND d.corpus_status <> 'ineligible'
                  AND c.strategy_version = %s
                GROUP BY c.chunk_strategy""", (MODEL_NAME, MODEL_VERSION, fingerprint, strategy_version)
         ).fetchall()
@@ -268,13 +276,17 @@ def run_evaluation(
             raise HTTPException(status_code=409, detail="Semantic evaluation needs current model-fingerprinted embeddings for every approved chunk. BM25-only evaluation remains available with method=bm25.")
     approved_documents = connection.execute(
         """SELECT document_id, document_sha256, reviewed_at FROM documents
-           WHERE review_status = 'approved' AND corpus_status <> 'ineligible' ORDER BY document_id"""
+           WHERE review_status IN ('approved', 'ready', 'ready_with_warnings') AND corpus_status <> 'ineligible' ORDER BY document_id"""
     ).fetchall()
+    approved_ids_by_sha256 = {
+        str(row["document_sha256"]).strip().lower(): row["document_id"]
+        for row in approved_documents if row["document_sha256"]
+    }
     chunk_versions = connection.execute(
         """SELECT c.chunk_strategy, c.strategy_version, count(*) AS chunk_count,
                   string_agg(c.chunk_id::text || ':' || md5(c.chunk_text), ',' ORDER BY c.chunk_id) AS chunk_digests
            FROM chunks c JOIN documents d USING (document_id)
-           WHERE d.review_status = 'approved' AND d.corpus_status <> 'ineligible'
+           WHERE d.review_status IN ('approved', 'ready', 'ready_with_warnings') AND d.corpus_status <> 'ineligible'
            GROUP BY c.chunk_strategy, c.strategy_version
            ORDER BY c.chunk_strategy, c.strategy_version"""
     ).fetchall()
@@ -293,18 +305,41 @@ def run_evaluation(
         for strategy in ("fixed_size", "section_aware"):
             observations = []
             for item in questions:
+                expected_document_ids = set(item.expected_document_ids)
+                missing_sources = []
+                for digest in item.expected_document_sha256s:
+                    document_id = approved_ids_by_sha256.get(digest.strip().lower())
+                    if document_id is None:
+                        missing_sources.append(digest)
+                    else:
+                        expected_document_ids.add(document_id)
+                if missing_sources:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=("Evaluation source PDFs must be ingested, approved, and eligible before the run. "
+                                f"Unmatched SHA-256 labels: {', '.join(missing_sources)}"),
+                    )
                 result = run_retrieval(connection, RetrievalRequest(
                     question=item.question, method=method, chunk_strategy=strategy,
                     strategy_version=strategy_version, top_k=top_k
                 ))
                 if result.get("index_status"):
                     raise HTTPException(status_code=409, detail="Semantic embeddings are missing. Approve documents and run python -m app.embed before evaluation.")
-                rank = next((row["rank"] for row in result["results"]
-                             if row["document_id"] in item.expected_document_ids
-                             and (not item.expected_pages or
-                                  (row["page_start"] is not None and any(
-                                      row["page_start"] <= page <= (row["page_end"] or row["page_start"])
-                                      for page in item.expected_pages)))), None)
+                matching_rows = [row for row in result["results"]
+                                 if row["document_id"] in expected_document_ids
+                                 and (not item.expected_pages or
+                                      (row["page_start"] is not None and any(
+                                          row["page_start"] <= page <= (row["page_end"] or row["page_start"])
+                                          for page in item.expected_pages)))]
+                if item.require_all_documents:
+                    best_rank_by_document = {}
+                    for row in matching_rows:
+                        doc_id = row["document_id"]
+                        best_rank_by_document[doc_id] = min(best_rank_by_document.get(doc_id, row["rank"]), row["rank"])
+                    rank = (max(best_rank_by_document.values())
+                            if expected_document_ids.issubset(best_rank_by_document) else None)
+                else:
+                    rank = next((row["rank"] for row in matching_rows), None)
                 observations.append({"question": item, "hit": rank is not None,
                                      "rr": 1 / rank if rank else 0.0,
                                      "timings": result["timings"],
@@ -380,7 +415,7 @@ def approved_plans(
         """SELECT DISTINCT p.plan_id, p.insurer, p.plan_name, p.plan_type, p.coverage_type,
                   p.plan_year
            FROM plans p JOIN documents d USING (plan_id)
-           WHERE d.review_status = 'approved' AND d.corpus_status <> 'ineligible'
+           WHERE d.review_status IN ('approved', 'ready', 'ready_with_warnings') AND d.corpus_status <> 'ineligible'
            ORDER BY p.insurer, p.plan_name, p.plan_id"""
     ).fetchall()]
 
@@ -391,7 +426,7 @@ def chat(
     user: Annotated[dict, Depends(require_user)],
     connection: Annotated[psycopg.Connection, Depends(database_connection)],
 ) -> ChatResponse:
-    """Answer only from approved documents and reviewer-verified numerical facts."""
+    """Answer from queryable documents and traceable numerical facts."""
     try:
         result = answer_question(connection, request.question, request.context_plan_ids,
                                  request.previous_question, admin=user.get("admin") is True)
@@ -442,7 +477,7 @@ def answer_health(
            FROM chunks c JOIN documents d USING (document_id)
            LEFT JOIN chunk_embeddings e ON e.chunk_id = c.chunk_id
              AND e.model_name = %s AND e.model_version = %s
-           WHERE d.review_status = 'approved' AND d.corpus_status <> 'ineligible'
+           WHERE d.review_status IN ('approved', 'ready', 'ready_with_warnings') AND d.corpus_status <> 'ineligible'
            GROUP BY c.chunk_strategy ORDER BY c.chunk_strategy""", (MODEL_NAME, MODEL_VERSION)
     ).fetchall()
     return {"documents": [dict(row) for row in documents], "pages": [dict(row) for row in pages],
@@ -522,7 +557,8 @@ def list_parsed_documents(
 ) -> list[dict]:
     return [dict(row) for row in connection.execute(
         """SELECT d.document_id, d.original_filename, d.source_url, d.corpus_status, d.review_status,
-                  d.ingestion_error, p.plan_name, p.insurer, p.plan_type, p.coverage_type,
+                  d.ingestion_error, d.processing_stages, d.processing_warnings,
+                  p.plan_name, p.insurer, p.plan_type, p.coverage_type,
                   p.plan_year, count(pg.page_id) AS parsed_pages
            FROM documents d LEFT JOIN plans p USING (plan_id)
            LEFT JOIN document_pages pg ON pg.document_id = d.document_id
@@ -583,7 +619,8 @@ def document_inspection(
 ) -> dict:
     doc = connection.execute(
         """SELECT d.document_id, d.original_filename, d.corpus_status, d.review_status,
-                  d.ingestion_error, p.plan_name, p.insurer, p.plan_type, p.coverage_type, p.plan_year
+                  d.ingestion_error, d.processing_stages, d.processing_warnings,
+                  p.plan_name, p.insurer, p.plan_type, p.coverage_type, p.plan_year
            FROM documents d LEFT JOIN plans p USING (plan_id) WHERE d.document_id = %s""",
         (document_id,),
     ).fetchone()
@@ -609,14 +646,16 @@ def review_document(
 ) -> dict:
     if review.review_status == "approved":
         ready = connection.execute(
-            "SELECT 1 FROM documents d WHERE d.document_id = %s AND d.review_status = 'needs_review' AND EXISTS (SELECT 1 FROM document_pages p WHERE p.document_id = d.document_id)",
+            """SELECT 1 FROM documents d WHERE d.document_id = %s
+               AND d.review_status IN ('ready', 'ready_with_warnings', 'approved', 'rejected')
+               AND d.processing_stages->>'embedding' = 'completed'""",
             (document_id,),
         ).fetchone()
         if not ready:
-            raise HTTPException(status_code=409, detail="Only successfully ingested documents awaiting review can be approved.")
+            raise HTTPException(status_code=409, detail="Only fully processed ready documents can be explicitly approved.")
     row = connection.execute(
         """UPDATE documents SET review_status = %s, reviewed_by_firebase_uid = %s, reviewed_at = now()
-           WHERE document_id = %s AND review_status IN ('needs_review','approved','rejected')
+           WHERE document_id = %s AND review_status IN ('ready','ready_with_warnings','approved','rejected')
            RETURNING document_id, corpus_status, review_status, reviewed_at""",
         (review.review_status, admin.get("uid"), document_id),
     ).fetchone()
@@ -632,12 +671,13 @@ def retry_document_ingestion(
     connection: Annotated[psycopg.Connection, Depends(database_connection)],
 ) -> dict:
     row = connection.execute(
-        """UPDATE documents SET review_status = 'uploaded', ingestion_error = NULL
-           WHERE document_id = %s AND review_status = 'needs_review'
+        """UPDATE documents SET review_status = 'uploaded', ingestion_error = NULL,
+           processing_stages = '{}'::jsonb, processing_warnings = '[]'::jsonb
+           WHERE document_id = %s AND review_status IN ('needs_review', 'failed')
            RETURNING document_id, review_status""", (document_id,)
     ).fetchone()
     if not row:
-        raise HTTPException(status_code=409, detail="Only a document awaiting review can be queued for re-ingestion.")
+        raise HTTPException(status_code=409, detail="Only a failed or pending document can be queued for reprocessing.")
     return dict(row)
 
 

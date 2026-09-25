@@ -39,6 +39,10 @@ def model_fingerprint() -> str:
     return digest.hexdigest()
 
 
+def model_dimension() -> int:
+    return int(_model().get_sentence_embedding_dimension())
+
+
 def encode_texts(texts: list[str]):
     import numpy as np
 
@@ -48,7 +52,7 @@ def encode_texts(texts: list[str]):
 
 def approved_chunks(connection, strategy: str, strategy_version: int = 1, plan_id: int | None = None,
                     document_id: int | None = None, section: str | None = None) -> list[dict[str, Any]]:
-    filters = ["d.review_status = 'approved'", "d.corpus_status <> 'ineligible'",
+    filters = ["d.review_status IN ('approved', 'ready', 'ready_with_warnings')", "d.corpus_status <> 'ineligible'",
                "c.chunk_strategy = %s", "c.strategy_version = %s"]
     params: list[Any] = [strategy, strategy_version]
     if plan_id is not None:
@@ -105,7 +109,7 @@ def retrieve(connection, question: str, method: str, strategy: str, top_k: int =
         sentence_model = _model()
         expected_dimension = sentence_model.get_sentence_embedding_dimension()
         model_load_ms = (time.perf_counter() - model_started) * 1000 if not was_loaded else 0.0
-        embedding_filters = ["d.review_status = 'approved'", "d.corpus_status <> 'ineligible'", "c.chunk_strategy = %s",
+        embedding_filters = ["d.review_status IN ('approved', 'ready', 'ready_with_warnings')", "d.corpus_status <> 'ineligible'", "c.chunk_strategy = %s",
                              "c.strategy_version = %s", "ce.model_name = %s", "ce.model_version = %s",
                              "ce.model_fingerprint = %s"]
         embedding_params: list[Any] = [strategy, strategy_version, MODEL_NAME, MODEL_VERSION, fingerprint]
@@ -181,17 +185,19 @@ class EmbeddingDataError(RuntimeError):
     """Stored semantic vectors are malformed or incompatible with the configured model."""
 
 
-def make_document_embeddings(connection, batch_size: int = 32) -> dict[str, int]:
-    """Create local embeddings for chunks of reviewed, approved documents."""
+def make_document_embeddings(connection, batch_size: int = 32, document_id: int | None = None) -> dict[str, int]:
+    """Create local embeddings for queryable chunks or a processing document."""
     fingerprint = model_fingerprint()
     rows = connection.execute(
         """SELECT c.chunk_id, c.chunk_text FROM chunks c
            JOIN documents d USING (document_id)
            LEFT JOIN chunk_embeddings e ON e.chunk_id = c.chunk_id
              AND e.model_name = %s AND e.model_version = %s
-           WHERE d.review_status = 'approved' AND d.corpus_status <> 'ineligible'
+           WHERE d.review_status IN ('approved', 'ready', 'ready_with_warnings', 'needs_review')
+             AND d.corpus_status <> 'ineligible'
+             AND (%s::bigint IS NULL OR d.document_id = %s)
              AND (e.embedding_id IS NULL OR e.model_fingerprint IS DISTINCT FROM %s)
-           ORDER BY c.chunk_id""", (MODEL_NAME, MODEL_VERSION, fingerprint)
+           ORDER BY c.chunk_id""", (MODEL_NAME, MODEL_VERSION, document_id, document_id, fingerprint)
     ).fetchall()
     inserted = 0
     for offset in range(0, len(rows), batch_size):

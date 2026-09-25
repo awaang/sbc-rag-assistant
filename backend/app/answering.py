@@ -1,4 +1,4 @@
-"""Deterministic answers from reviewed benefits and approved source evidence."""
+"""Deterministic answers from ready, traceable source evidence."""
 
 from __future__ import annotations
 
@@ -114,6 +114,15 @@ def _value(record: dict) -> str | None:
     return next(iter(values))
 
 
+def _usable_section(record: dict) -> bool:
+    section = _fold(str(record.get("section") or ""))
+    plan = _fold(str(record.get("plan_name") or ""))
+    if not section or section in {"plan title", "plan summary", "summary of benefits and coverage", plan}:
+        return False
+    return not (section.endswith(" plan") and not any(
+        term in section for term in ("cost", "benefit", "coverage", "deductible")))
+
+
 def _ordered_value(value: str) -> tuple[str, Decimal] | None:
     if value.startswith("$"):
         return "dollars", Decimal(value[1:].replace(",", ""))
@@ -134,7 +143,7 @@ def _response(status: str, answer: str, plans: list[dict], path: str, started: f
               admin: bool = False) -> dict:
     debug: dict[str, Any] = {
         "evidence_path": path,
-        "corpus": "approved provisional documents; SBC/public-source status unverified",
+        "corpus": "queryable provisional documents; SBC/public-source status unverified",
         "latency_ms": round((time.perf_counter() - started) * 1000, 1),
     }
     if admin:
@@ -148,7 +157,7 @@ def _approved_plans(connection) -> list[dict]:
     rows = connection.execute(
         """SELECT DISTINCT p.plan_id, p.insurer, p.plan_name, p.plan_type, p.coverage_type, p.plan_year
            FROM plans p JOIN documents d USING (plan_id)
-           WHERE d.review_status = 'approved' AND d.corpus_status <> 'ineligible'
+           WHERE d.review_status IN ('approved', 'ready', 'ready_with_warnings') AND d.corpus_status <> 'ineligible'
            ORDER BY p.insurer, p.plan_name, p.plan_id"""
     ).fetchall()
     return [dict(row) for row in rows]
@@ -166,7 +175,7 @@ def _benefits(connection, plan_ids: list[int], category: str) -> list[dict]:
            JOIN plans p ON p.plan_id = b.plan_id
            LEFT JOIN document_pages pg ON pg.page_id = b.source_page_id AND pg.document_id = b.document_id
            WHERE b.plan_id = ANY(%s) AND b.category = %s
-             AND d.review_status = 'approved' AND d.corpus_status <> 'ineligible'
+             AND d.review_status IN ('approved', 'ready', 'ready_with_warnings') AND d.corpus_status <> 'ineligible'
            ORDER BY b.plan_id, b.benefit_id""", (plan_ids, category)
     ).fetchall()
     return [dict(row) for row in rows]
@@ -189,44 +198,44 @@ def _numeric_answer(connection, question: str, plans: list[dict], category: str,
                 for key, wanted in requested.items())]
         if requested_service:
             candidates = [row for row in candidates if _dimensions(row)[2] == requested_service]
-        verified = [row for row in candidates if row["verification_status"] == "verified"]
-        if any(row["verification_status"] == "conflicting" for row in candidates):
-            reasons.append(f"{_display(plan)} has conflicting reviewed values")
-        elif any(
-                row["verification_status"] in {"pending_review", "ambiguous"}
-                and all(
-                    key not in requested or _dimensions(row)[index] in {wanted, "unspecified"}
-                    for key, wanted, index in (("network", requested.get("network"), 0),
-                                               ("scope", requested.get("scope"), 1))
-                    if wanted is not None
-                )
-                and (not requested_service or _dimensions(row)[2] in {requested_service, "unspecified"})
-                for row in plan_candidates):
-            reasons.append(f"{_display(plan)} has unresolved benefit candidates for this question")
-        elif not verified:
-            reasons.append(f"{_display(plan)} has no verified value for this question")
-        elif any(not row["section"] or not row["source_section_verified"]
-                 or not _value(row) or not row["reviewed_at"]
-                 or (row["parse_status"] is not None and row["parse_status"] != "parsed")
-                 for row in verified):
-            reasons.append(f"{_display(plan)} lacks an unambiguous reviewed value or usable source provenance")
+        relevant = [row for row in plan_candidates if all(
+            key not in requested or _dimensions(row)[index] in {wanted, "unspecified"}
+            for key, wanted, index in (("network", requested.get("network"), 0),
+                                       ("scope", requested.get("scope"), 1)) if wanted is not None
+        ) and (not requested_service or _dimensions(row)[2] in {requested_service, "unspecified"})]
+        usable = [row for row in candidates if row["verification_status"] in {"verified", "pending_review"}]
+        if any(row["verification_status"] in {"conflicting", "ambiguous"} for row in relevant):
+            reasons.append(f"{_display(plan)} has ambiguous or conflicting values for this question")
+        elif any(row not in candidates and row["verification_status"] in {"verified", "pending_review"}
+                 and _value(row) and any(_value(row) != _value(chosen) for chosen in candidates)
+                 for row in relevant):
+            reasons.append(f"{_display(plan)} has conflicting values with unspecified context")
+        elif any(row["verification_status"] in {"verified", "pending_review"} and (
+                not _usable_section(row) or not row.get("page_number") or not _value(row)
+                or row.get("parse_status") != "parsed"
+                or (row["verification_status"] == "verified" and
+                    (not row.get("source_section_verified") or not row.get("reviewed_at"))))
+                for row in relevant):
+            reasons.append(f"{_display(plan)} lacks an unambiguous value or usable source provenance")
+        elif not usable:
+            reasons.append(f"{_display(plan)} has no supported value for this question")
         else:
-            signatures = {(_dimensions(row), _value(row)) for row in verified}
+            signatures = {(_dimensions(row), _value(row)) for row in usable}
             if len(signatures) > 1:
-                dimensions = {_dimensions(row) for row in verified}
-                reasons.append(f"{_display(plan)} has {'multiple benefit contexts' if len(dimensions) > 1 else 'conflicting verified values'}")
+                dimensions = {_dimensions(row) for row in usable}
+                reasons.append(f"{_display(plan)} has {'multiple benefit contexts' if len(dimensions) > 1 else 'conflicting values'}")
             else:
-                selected.append(verified[0])
+                selected.append(next((row for row in usable if row["verification_status"] == "verified"), usable[0]))
     if reasons:
         status = "clarification_needed" if all("multiple benefit contexts" in reason for reason in reasons) else "insufficient_evidence"
         answer = ("Please specify the network, individual or family context, and service where relevant. "
-                  if status == "clarification_needed" else "I can’t establish the requested value from approved, reviewed evidence. ")
+                  if status == "clarification_needed" else "I can’t establish the requested value from traceable evidence. ")
         answer += " ".join(reasons) + "."
-        return _response(status, answer, plans, "verified_structured_benefits", started,
+        return _response(status, answer, plans, "structured_benefits", started,
                          details={"evidence_gate": reasons, "candidate_count": len(rows)}, admin=admin)
     if len(selected) > 1 and len({_dimensions(row) for row in selected}) > 1:
         return _response("clarification_needed", "The reviewed values use different network, individual/family, or service contexts. Specify a common context to compare.",
-                         plans, "verified_structured_benefits", started,
+                         plans, "structured_benefits", started,
                          details={"evidence_gate": "incomparable_dimensions"}, admin=admin)
     citations = [_citation(row) for row in selected]
     lines = [f"{row['plan_name']}: {row['value_text']}" for row in selected]
@@ -235,16 +244,16 @@ def _numeric_answer(connection, question: str, plans: list[dict], category: str,
     if direction:
         amounts = [_ordered_value(_value(row)) for row in selected]
         if any(amount is None for amount in amounts) or len({amount[0] for amount in amounts}) != 1:
-            return _response("clarification_needed", "The reviewed values use different or nonnumeric units, so I can’t order them reliably.",
-                             plans, "verified_structured_benefits", started, admin=admin)
+            return _response("clarification_needed", "The values use different or nonnumeric units, so I can’t order them reliably.",
+                             plans, "structured_benefits", started, admin=admin)
         lowest = direction.group(1).lower() in {"lower", "less"}
         target = (min if lowest else max)(amount[1] for amount in amounts)
         winners = [row["plan_name"] for row, amount in zip(selected, amounts) if amount[1] == target]
         comparison_text = (f"{', '.join(winners)} {'tie for the' if len(winners) > 1 else 'has the'} "
-                           f"{'lowest' if lowest else 'highest'} reviewed {LABELS[category]}. ")
-    answer = (comparison_text + f"Reviewed {LABELS[category]} source wording: " + " ".join(lines) +
-              " These are from approved provisional documents; their SBC and public-source status is unverified.")
-    return _response("answered", answer, plans, "verified_structured_benefits", started, citations,
+                           f"{'lowest' if lowest else 'highest'} {LABELS[category]}. ")
+    answer = (comparison_text + f"{LABELS[category].capitalize()} source wording: " + " ".join(lines) +
+              " These are from provisional documents; their SBC and public-source status is unverified.")
+    return _response("answered", answer, plans, "structured_benefits", started, citations,
                      details={"benefit_ids": [row["benefit_id"] for row in selected],
                               "document_ids": [row["document_id"] for row in selected]}, admin=admin)
 
@@ -313,7 +322,7 @@ def _coverage_answer(connection, question: str, plans: list[dict], all_plans: li
         candidates = [_source_unit(row, terms) for row in result["results"]]
         candidates = [item for item in candidates if item]
         if not candidates:
-            return _response("insufficient_evidence", "I can’t establish that coverage from a traceable source row in every requested approved document.",
+            return _response("insufficient_evidence", "I can’t establish that coverage from a traceable source row in every requested ready document.",
                              plans, "retrieved_source", started,
                              details={"retrieval_method": method, "chunk_strategy": strategy, "retrieval": traces}, admin=admin)
         table_pages = {item[1]["page_number"] for item in candidates if item[1]["kind"] == "table_row"}
@@ -327,7 +336,7 @@ def _coverage_answer(connection, question: str, plans: list[dict], all_plans: li
                                       "matching_chunk_ids": [item[1]["chunk_id"] for item in candidates]}, admin=admin)
         chosen.append(max(candidates, key=lambda item: (item[0], -item[1]["rank"]))[1])
     citations = [_citation(row) for row in chosen]
-    answer = "Source wording from approved provisional documents: " + " ".join(
+    answer = "Source wording from queryable provisional documents: " + " ".join(
         f"{row['plan_name']}: “{row['wording']}”" for row in chosen)
     answer += " Their SBC and public-source status is unverified."
     return _response("answered", answer, plans, "retrieved_source", started, citations,
@@ -341,7 +350,7 @@ def answer_question(connection, question: str, context_plan_ids: list[int] | Non
     started = time.perf_counter()
     plans = _approved_plans(connection)
     if not plans:
-        return _response("insufficient_evidence", "No reviewed, approved plan documents are available yet.", [],
+        return _response("insufficient_evidence", "No ready plan documents are available yet.", [],
                          "no_approved_documents", started, admin=admin)
     explicit = _matches(question, plans)
     comparison = bool(COMPARISON.search(question)) or bool(
@@ -365,7 +374,7 @@ def answer_question(connection, question: str, context_plan_ids: list[int] | Non
     if comparison and not explicit and len(requested_coverages) == 1:
         selected = [plan for plan in selected if plan["coverage_type"] in requested_coverages]
     if not selected:
-        return _response("clarification_needed", "Which plan do you mean? Available approved plans: " +
+        return _response("clarification_needed", "Which plan do you mean? Available plans: " +
                          "; ".join(_display(plan) for plan in plans) + ".", [], "plan_resolution", started,
                          details={"available_plan_ids": [plan["plan_id"] for plan in plans]}, admin=admin)
     if len(selected) > 1 and not comparison:
@@ -373,7 +382,7 @@ def answer_question(connection, question: str, context_plan_ids: list[int] | Non
                          "; ".join(_display(plan) for plan in selected) + ".", [], "plan_resolution", started,
                          details={"candidate_plan_ids": [plan["plan_id"] for plan in selected]}, admin=admin)
     if comparison and len(selected) < 2:
-        return _response("clarification_needed", "Name at least two plans to compare, or ask to compare across all approved plans.",
+        return _response("clarification_needed", "Name at least two plans to compare, or ask to compare across all ready plans.",
                          selected, "plan_resolution", started, admin=admin)
     if comparison and len({plan["coverage_type"] for plan in selected}) > 1:
         return _response("clarification_needed", "These plans have different coverage types (medical, dental, or vision). Name plans with the same coverage type to compare.",
