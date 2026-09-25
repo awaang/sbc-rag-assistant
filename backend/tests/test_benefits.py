@@ -59,6 +59,12 @@ def test_aetna_received_pdf_emits_individual_and_family_oop_candidates():
     assert all(candidate.dimensions["period"] == "calendar year" for candidate in oop)
     assert all(candidate.status == "pending_review" for candidate in oop)
 
+    emergency_room = next(candidate for candidate in candidates
+                          if candidate.category == "er_cost_sharing"
+                          and candidate.value_text.startswith("Emergency Room:"))
+    assert emergency_room.section == "EMERGENCY MEDICAL CARE"
+    assert emergency_room.dimensions["network"] == "IN-NETWORK"
+
 
 def test_table_continuations_and_network_columns_keep_distinct_contexts():
     candidates = extract_candidates([{

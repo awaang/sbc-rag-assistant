@@ -74,7 +74,8 @@ def _table_candidate_rows(page: dict) -> list[BenefitCandidate]:
         active_period: str | None = None
         table_candidates: list[BenefitCandidate] = []
         headers = [str(value or "") for value in table.get("headers", [])]
-        for _, row_headers, row in iter_table_rows(table):
+        row_sections = table.get("row_sections") or []
+        for row_number, row_headers, row in iter_table_rows(table):
             cells = [str(value or "").strip() for value in row]
             row_text = " ".join(cell for cell in cells if cell)
             if not row_text:
@@ -156,7 +157,9 @@ def _table_candidate_rows(page: dict) -> list[BenefitCandidate]:
                         wording += f" (per {period})"
                     row_candidates.append(BenefitCandidate(
                         category=category, value_text=wording, page_number=page_number,
-                        section=page.get("section_heading"), dimensions=dimensions,
+                        section=row_sections[row_number - 1] if row_number <= len(row_sections)
+                        else page.get("section_heading"),
+                        dimensions=dimensions,
                         status="pending_review"))
             # Remove repeated OCR/table cells while keeping same amounts that
             # belong to different scopes or networks.

@@ -79,13 +79,15 @@ Install backend dependencies, apply migrations, then run the local ingestion com
 python -m app.ingest
 ```
 
-The command downloads pending PDFs from Neon, parses page text and table cells with pdfplumber, writes page/table provenance, and creates both fixed-size and section-aware chunks. Table rows stay intact with their headers even when a row exceeds the target chunk size. Parse issues remain visible in the admin Documents page. Inspect pages/chunks, then approve or reject the document. Approval admits a document to the provisional development workflow; it does not establish SBC status or public availability. After approval, generate missing vectors locally with:
+The command downloads pending PDFs from Neon, parses page text and table cells with pdfplumber, writes page/table provenance, and creates both fixed-size and section-aware chunks. Where PDF coordinates are available, it orders text and table rows by page position, filters text inside detected tables from chunks, and associates rows with detected preceding section headings and network column labels. Table rows stay intact with their headers even when a row exceeds the target chunk size. Parse issues remain visible in the admin Documents page. Inspect pages/chunks, then approve or reject the document. Approval admits a document to the provisional development workflow; it does not establish SBC status or public availability. After approval, generate missing vectors locally with:
 
 ```bash
 python -m app.embed
 ```
 
-The revised parser retains all extracted table rows, including rows before and at a detected header. To refresh a previously ingested document, run `python -m app.ingest --reprocess-id DOCUMENT_ID` locally. This removes its old chunks, embeddings, parsed pages, and benefit reviews, then returns the document to **needs review**. Inspect and approve it again, re-extract and review benefit candidates, and run `python -m app.embed` after approval.
+The revised parser retains all extracted table rows, including rows before and at a detected header. It retains original cells in `raw_rows` when a duplicated helper-cell value is removed from the normalized row. To refresh a previously ingested document, run `python -m app.ingest --reprocess-id DOCUMENT_ID` locally. This removes its old chunks, embeddings, parsed pages, and benefit reviews, then returns the document to **needs review**. Inspect and approve it again, re-extract and review benefit candidates, and run `python -m app.embed` after approval.
+
+A page with multiple detected headings has no single page-level section label. Row-level section provenance is kept where detected; missing or uncertain section labels still require reviewer confirmation before a numerical answer can use them.
 
 The first run downloads the configured sentence-transformer model if it is not cached. Parsing and embedding use local CPU/memory; Render does not run ingestion.
 
