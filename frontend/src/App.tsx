@@ -420,11 +420,11 @@ function AdminDocumentsSection({ user, onDocumentsUpdated }: { user: User; onDoc
   return <section className="mt-12" aria-labelledby="admin-documents-title">
     <div className="page-heading"><p className="eyebrow">ADMIN WORKSPACE</p><h2 id="admin-documents-title">Source documents</h2><p>Upload PDFs and inspect processing, warnings, pages, and chunks. Completed admin uploads are available for questions automatically.</p></div>
     {error && <p role="alert" className="chat-error">{error}</p>}{notice && <p role="status">{notice}</p>}
-    <Card id="admin-document-upload"><CardContent className="p-5"><h3 className="font-semibold">Upload a plan PDF</h3><p className="mb-4 text-sm text-muted-foreground">Uploads are stored in Neon and processed automatically. Maximum file size: 15 MB.</p>
+    <Card id="admin-document-upload"><CardContent className="p-5"><h3 className="font-semibold">Upload a plan PDF</h3><p className="mb-4 text-sm text-muted-foreground">Uploads are stored in Neon and processed automatically. Maximum file size: 15 MB. Fields marked <span className="required-mark">*</span> are required.</p>
       <form onSubmit={upload} className="grid gap-3 sm:grid-cols-2">
-        <label className="field-label">PDF file<input className="text-input" type="file" name="file" accept="application/pdf,.pdf" required /></label>
-        <label className="field-label">Insurer<input className="text-input" name="insurer" maxLength={120} required /></label>
-        <label className="field-label">Plan name<input className="text-input" name="plan_name" maxLength={240} required /></label>
+        <label className="field-label">PDF file<RequiredMark /><input className="file-input" type="file" name="file" accept="application/pdf,.pdf" required /></label>
+        <label className="field-label">Insurer<RequiredMark /><input className="text-input" name="insurer" maxLength={120} required /></label>
+        <label className="field-label">Plan name<RequiredMark /><input className="text-input" name="plan_name" maxLength={240} required /></label>
         <label className="field-label">Plan type<select className="text-input" name="plan_type"><option value="unknown">Unknown</option><option value="hmo">HMO</option><option value="ppo">PPO</option><option value="hdhp">HDHP</option><option value="pos">POS</option><option value="other">Other</option></select></label>
         <label className="field-label">Coverage type<select className="text-input" name="coverage_type"><option value="medical">Medical</option><option value="dental">Dental</option><option value="vision">Vision</option><option value="unknown">Unknown</option></select></label>
         <label className="field-label">Plan year<input className="text-input" name="plan_year" type="number" min="1900" max="2200" /></label>
@@ -438,6 +438,10 @@ function AdminDocumentsSection({ user, onDocumentsUpdated }: { user: User; onDoc
     </CardContent></Card>
     {inspection && <Card className="mt-5"><CardContent className="p-5"><h3 className="font-semibold">Inspection: {inspection.document.original_filename}</h3><p className="mb-4 text-xs text-muted-foreground">{inspection.document.plan_name} · {inspection.document.corpus_status} · {inspection.document.review_status}</p><p className="text-xs">Stages: {Object.entries(inspection.document.processing_stages || {}).map(([stage, state]) => `${stage}: ${state}`).join(" · ") || "not started"}</p>{inspection.document.processing_warnings?.map((warning: string, index: number) => <p key={index} className="text-sm text-amber-800">Warning: {warning}</p>)}{inspection.document.ingestion_error && <p className="text-sm text-red-800">Failure: {inspection.document.ingestion_error}</p>}{inspection.pages.map((page: any) => <details className="border-t py-3" key={page.page_id}><summary className="cursor-pointer font-medium">Page {page.page_number} · {page.section_heading || "Section not detected"} · {page.parse_status}</summary><pre className="mt-2 whitespace-pre-wrap text-xs">{page.extracted_text || "No text extracted"}{page.tables_json?.length ? `\n\nTABLES\n${JSON.stringify(page.tables_json, null, 2)}` : ""}</pre></details>)}<details className="border-t py-3"><summary className="cursor-pointer font-medium">Chunks ({inspection.chunks.length})</summary>{inspection.chunks.map((chunk: any) => <details className="ml-3 border-t py-2" key={chunk.chunk_id}><summary>{chunk.chunk_strategy} · pages {chunk.page_start}–{chunk.page_end}</summary><pre className="whitespace-pre-wrap text-xs">{chunk.chunk_text}\n\n{JSON.stringify(chunk.provenance, null, 2)}</pre></details>)}</details></CardContent></Card>}
   </section>;
+}
+
+function RequiredMark() {
+  return <span className="required-mark" aria-hidden="true"> *</span>;
 }
 
 function ChatPage({ question, setQuestion, handleSubmit, loading, turns, onNewChat, isAdmin }: {
