@@ -15,8 +15,8 @@ The FastAPI service now triggers the same parsing, chunking, candidate extractio
 - **Semantic retrieval:** Generate document and query embeddings with `sentence-transformers/all-MiniLM-L6-v2` in the FastAPI service, using the same configurable model version. The local maintenance command uses that same pipeline. Persist queryable document embedding values as ordinary per-chunk data in Neon; Neon does not perform vector search and pgvector is not used. The API currently builds an in-memory FAISS index for each semantic request. No embedding API or shared filesystem is required. Render memory fit remains **TBD** after a local macOS embedding run for one PDF exceeded the free service's 512 MiB limit.
 - **Keyword retrieval:** `rank-bm25` over the same canonical chunks, independently measurable from semantic search.
 - **PDF handling:** `pdfplumber` first; evaluate actual SBC output and add Camelot only for tables where it demonstrably improves row/cell structure.
-- **Answers, initial phase:** Deterministic formatting for structured numeric lookups and comparisons, citations, clarification, and abstention. Do not integrate Gemini in the initial implementation.
-- **Answers, later phase:** Gemini may be added as an optional final phrasing adapter only after the deterministic answer path is implemented and evaluated. It receives validated facts/evidence and cannot choose values, create citations, fill missing evidence, or override abstention. Do not make initial completion dependent on Gemini or a free tier.
+- **Answers, deterministic path:** Deterministic formatting for structured numeric lookups and comparisons, citations, clarification, and abstention. This path produces every answer and is the complete response when Gemini is disabled (the default).
+- **Answers, optional phase:** Gemini can be enabled as a final phrasing adapter after the deterministic answer path. It chooses among allowlisted templates, while the backend fills values and source wording and retains citations and abstention. Measured quality and latency remain pending the corpus evaluation; do not make demo completion dependent on Gemini or a free tier.
 - **Deployment:** Render Free static site + web service; Neon and Firebase are external managed services. Expect API sleep/cold starts and ephemeral Render filesystems. Store durable state in Neon. Do not require a custom domain or paid persistent disk.
 - **Uploaded source files:** Store modest PDFs as PostgreSQL binary data in Neon for the initial six-plan demo to avoid another account/service and keep uploads durable. Impose a documented upload-size limit below provider/request limits. If corpus size outgrows database storage, revisit object storage only after verifying a no-card option.
 - **Ingestion execution:** An admin upload or Retry queues a document in Neon and schedules the full pipeline after the FastAPI response. A database advisory lock serializes processing; startup and admin document refresh resume interrupted work. Two interrupted attempts stop automatic retries and require admin Retry. Render sets the configurable embedding batch size to 1 to reduce peak memory. `python -m app.pipeline`, `app.ingest`, and `app.embed` remain maintenance commands. Parsed provenance, stage outcomes, warnings, and embeddings are stored in Neon. No uploaded file or generated index depends on Render's ephemeral filesystem.
@@ -119,11 +119,12 @@ The FastAPI service now triggers the same parsing, chunking, candidate extractio
 
 **Milestone:** The deployed demo is reproducible within no-card free-tier constraints and reports measured evidence quality.
 
-### Later optional phase — Gemini phrasing
+### Optional phase — Gemini phrasing
 
-- [ ] Only after the initial answer flow is complete, deployed, and evaluated, optionally add Gemini behind an adapter to phrase validated answer content.
-- [ ] Verify the Gemini path preserves backend-selected facts, citations, and abstention, and compare quality/latency/token use with deterministic output.
-- [ ] Keep the application fully functional with Gemini disabled or unconfigured.
+- [x] Add Gemini behind a disabled-by-default adapter after the deterministic answer path. A user request advanced this implementation before deployment and baseline evaluation; those measurements remain **TBD**.
+- [x] Keep backend-selected facts, citations, and abstention outside model control by allowing only a checked phrasing-template selection. Record per-response token use and latency when Gemini is called.
+- [ ] Compare quality, latency, and token use with deterministic output on the labeled provisional corpus after evaluation data is available.
+- [x] Keep the application functional with Gemini disabled, unconfigured, or unavailable.
 
 ## Definition of done
 

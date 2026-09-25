@@ -26,6 +26,7 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 from app.benefits import extract_candidates
 from app.answering import answer_question
+from app.gemini import phrase_answer
 from app.ingestion import parse_pdf
 from app.retrieval import EmbeddingDataError, MODEL_NAME, MODEL_VERSION, model_fingerprint, retrieve
 
@@ -446,7 +447,7 @@ def chat(
         raise HTTPException(status_code=503, detail=f"Retrieval dependency/model unavailable: {type(exc).__name__}.") from exc
     except ValueError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return ChatResponse.model_validate(result)
+    return ChatResponse.model_validate(phrase_answer(result))
 
 
 @app.post("/api/admin/answer/preview", response_model=ChatResponse)
@@ -464,7 +465,7 @@ def answer_preview(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (ImportError, OSError) as exc:
         raise HTTPException(status_code=503, detail=f"Retrieval dependency/model unavailable: {type(exc).__name__}.") from exc
-    return ChatResponse.model_validate(result)
+    return ChatResponse.model_validate(phrase_answer(result))
 
 
 @app.get("/api/admin/answer-health")

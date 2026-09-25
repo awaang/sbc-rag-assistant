@@ -517,7 +517,7 @@ function ConversationTurn({ turn, isAdmin, loading }: { turn: ChatTurn; isAdmin:
             <summary><span>{isAdmin ? "Debug details" : "Answer details"}</span><span className="debug-hint">Evidence path &amp; request status</span></summary>
             <pre>{JSON.stringify(isAdmin
               ? { status: turn.response.status, matched_plans: turn.response.matched_plans, citations: turn.response.citations, ...turn.response.debug }
-              : { status: turn.response.status, matched_plans: turn.response.matched_plans, citations: turn.response.citations, evidence_path: turn.response.debug.evidence_path, corpus: turn.response.debug.corpus }, null, 2)}</pre>
+              : { status: turn.response.status, matched_plans: turn.response.matched_plans, citations: turn.response.citations, evidence_path: turn.response.debug.evidence_path, corpus: turn.response.debug.corpus, phrasing: turn.response.debug.phrasing, gemini_status: turn.response.debug.gemini_status, gemini_http_status: turn.response.debug.gemini_http_status, gemini_model: turn.response.debug.gemini_model, gemini_tokens: turn.response.debug.gemini_tokens, gemini_latency_ms: turn.response.debug.gemini_latency_ms }, null, 2)}</pre>
           </details>}
         </div>
       </div>

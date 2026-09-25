@@ -261,9 +261,17 @@ def _numeric_answer(connection, question: str, plans: list[dict], category: str,
                            f"{'lowest' if lowest else 'highest'} {LABELS[category]}. ")
     answer = (comparison_text + f"{LABELS[category].capitalize()} source wording: " + " ".join(lines) +
               " These are from provisional documents; their SBC and public-source status is unverified.")
-    return _response("answered", answer, plans, "structured_benefits", started, citations,
-                     details={"benefit_ids": [row["benefit_id"] for row in selected],
-                              "document_ids": [row["document_id"] for row in selected]}, admin=admin)
+    result = _response("answered", answer, plans, "structured_benefits", started, citations,
+                       details={"benefit_ids": [row["benefit_id"] for row in selected],
+                                "document_ids": [row["document_id"] for row in selected]}, admin=admin)
+    result["_gemini_facts"] = {
+        "kind": "numeric",
+        "category": LABELS[category],
+        "comparison": comparison_text,
+        "facts": [{"plan": row["plan_name"], "value": row["value_text"]} for row in selected],
+        "caveat": "These are from provisional documents; their SBC and public-source status is unverified.",
+    }
+    return result
 
 
 def _source_unit(chunk: dict, terms: set[str]) -> tuple[int, dict] | None:
@@ -350,9 +358,15 @@ def _coverage_answer(connection, question: str, plans: list[dict], all_plans: li
     answer = "Source wording from queryable provisional documents: " + " ".join(
         f"{row['plan_name']}: “{row['wording']}”" for row in chosen)
     answer += " Their SBC and public-source status is unverified."
-    return _response("answered", answer, plans, "retrieved_source", started, citations,
-                     details={"retrieval_method": method, "chunk_strategy": strategy, "retrieval": traces,
-                              "evidence_chunk_ids": [row["chunk_id"] for row in chosen]}, admin=admin)
+    result = _response("answered", answer, plans, "retrieved_source", started, citations,
+                       details={"retrieval_method": method, "chunk_strategy": strategy, "retrieval": traces,
+                                "evidence_chunk_ids": [row["chunk_id"] for row in chosen]}, admin=admin)
+    result["_gemini_facts"] = {
+        "kind": "coverage",
+        "facts": [{"plan": row["plan_name"], "wording": row["wording"]} for row in chosen],
+        "caveat": "Their SBC and public-source status is unverified.",
+    }
+    return result
 
 
 def answer_question(connection, question: str, context_plan_ids: list[int] | None = None,

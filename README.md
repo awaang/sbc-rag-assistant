@@ -25,7 +25,7 @@ The six PDFs in [`data/source-documents/received/`](data/source-documents/receiv
 - pdfplumber for initial PDF extraction, with Camelot added selectively if inspection shows a table needs it.
 - BM25 plus FAISS semantic search. FastAPI automatically parses, extracts, embeds, and assesses uploaded documents; `python -m app.pipeline` remains available for local maintenance. The API generates query embeddings with the same sentence-transformer model and builds a FAISS index from queryable vectors for semantic searches. Vectors are ordinary Neon array values; no embedding API or pgvector index is used. The admin playground compares configurations; ordinary answer mode will use the measured default after evaluation.
 - Evaluate four combinations: BM25 or semantic vector retrieval, each over fixed-size or semantic/section-aware table-safe chunks. The admin-only evaluation playground lets admins compare configurations. Ordinary chat currently uses BM25 with section-aware chunks as an explicitly provisional default; select the measured default after labeling and running the evaluation set.
-- Initial answers use deterministic formatting for supported facts, comparisons, citations, clarification, and abstention; Gemini is not part of the initial implementation. It may be added later as an optional final phrasing step over validated evidence and cannot supply facts or override abstention.
+- Answers use deterministic formatting for supported facts, comparisons, citations, clarification, and abstention. Optional Gemini framing can add a short approved introduction to a supported answer; it cannot supply facts or override abstention.
 - Render Free for the React static site and FastAPI web service. The service may sleep when idle, so the first request can be delayed. Persist application data in Neon, not Render's ephemeral filesystem.
 
 These selections target a free, no-credit-card demo within provider limits. Free tiers can sleep, pause, change limits, or require account verification; always confirm current terms before deployment. Admin PDF uploads are stored in Neon and automatically processed by the FastAPI service. Successful admin uploads are automatically approved and available for questions after all required stages complete with usable retrieval evidence. Render Free memory fit remains unverified; local profiling exceeded its current 512 MiB limit.
@@ -115,6 +115,20 @@ Numerical deductible, emergency room cost-sharing, copay, and out-of-pocket ques
 Automatically detected sections can support numerical answers when usable. Admins can optionally correct or explicitly confirm them during benefit review. Ambiguous candidates in the requested context block numerical answers. Lower/higher comparisons identify a plan only when values have comparable units; comparisons across medical, dental, and vision coverage types require clarification. Retrieval excludes documents marked ineligible.
 
 `ANSWER_RETRIEVAL_METHOD` defaults to `bm25` and `ANSWER_CHUNK_STRATEGY` to `section_aware` for broader chat questions. These are provisional settings, not measured winners. Set both on the API service after the labeled comparison identifies a default. Semantic chat retrieval also requires current local embeddings. The current retrieval implementation loads approved evidence and builds the search index during each request; startup caching and deployment memory checks remain open.
+
+### Optional Gemini framing
+
+Gemini is disabled by default. To enable it locally, create a Gemini API key in [Google AI Studio](https://aistudio.google.com/app/apikey), then set these values in the repository-root `.env` and restart the API:
+
+```dotenv
+GEMINI_ENABLED=true
+GEMINI_API_KEY=your-key-here
+GEMINI_MODEL=gemini-3.1-flash-lite
+```
+
+Keep the key only on the FastAPI service. Do not put it in `frontend/.env.local` or a `VITE_*` variable. For Render, add `GEMINI_API_KEY` in the API service's environment settings and set `GEMINI_ENABLED=true`; leave the frontend configuration alone. The key is separate from Firebase's web app key and service-account credentials. Check the model's availability, quota, and billing terms for your Google AI Studio project before enabling it.
+
+Gemini is called only after the server has produced a supported, cited answer. It sees the validated answer, not the user's question or chat history, and selects among phrasing templates. The server fills the selected template with the exact extracted values or quoted source wording; Gemini cannot write or change benefit facts. Citations and answer status stay under server control. The API retries HTTP 429 and 503 responses twice with short exponential backoff, then returns the deterministic answer if Gemini remains unavailable or output fails the template check. Answer details show `debug.phrasing` (`gemini` or `deterministic`), Gemini status, model, token use, and latency. HTTP failures include the status code; the API never returns the key or provider response body. Broader free-form rephrasing remains out of scope until it can be checked against the evidence reliably.
 
 To grant or revoke an admin claim for an existing Firebase account, use the local CLI with the service-account credentials configured above:
 

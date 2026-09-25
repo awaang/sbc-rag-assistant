@@ -32,7 +32,7 @@ Users must authenticate before accessing the question-answering application. Fir
 - Evaluate the system with approximately 20–30 questions with known correct answers, measuring answer accuracy and latency per query. Token usage is deferred until the optional Gemini phrasing phase is enabled; deterministic answers have no model-token usage to report.
 - Document implementation decisions, chunking tradeoffs, retrieval results, extraction accuracy, and what would change with a real budget.
 - **Initial implementation:** use deterministic answer formatting for supported facts, comparisons, citations, clarification, and abstention. Do not integrate or call Gemini in the initial implementation.
-- **Later phase:** Gemini may be added only after the deterministic evidence-grounded answer path is implemented and evaluated, and only as an optional final phrasing step over already validated evidence. It must not select facts, fill gaps, alter citations, or override abstention. Its availability/free-tier status is not a prerequisite for the initial demo.
+- **Optional phrasing phase:** Gemini can be enabled after the deterministic evidence-grounded answer path is implemented, as a final phrasing step over already validated evidence. It must not select facts, fill gaps, alter citations, or override abstention. Measured answer quality and Gemini quality/latency remain **TBD** until the provisional corpus evaluation is run. Its availability/free-tier status is not a prerequisite for the demo.
 - Provide actual admin PDF uploads and review controls. Uploads are stored durably and automatically trigger parsing, chunking, benefit extraction, embedding, and readiness assessment in the FastAPI service. Interrupted queued work resumes after a service restart; repeated interruptions stop with a visible failure and an admin Retry action. The local pipeline command remains available for maintenance. Routine queryability does not require document approval or per-benefit confirmation.
 - Target a fully free, no-credit-card local/deployed demo using Firebase Spark, Neon Free, and Render Free, subject to current provider limits and account verification. Free-tier cold starts and quotas are acceptable limitations and must be documented.
 - Show basic evidence-path/citation diagnostics to all users and detailed retrieval, parsing, extraction, and ingestion diagnostics to admins.
@@ -75,7 +75,7 @@ Users must authenticate before accessing the question-answering application. Fir
 4. **Question answering and citations**
    - Accept natural-language questions about a plan or comparisons across plans.
    - Initial implementation produces answers from retrieved evidence and structured extracted data using deterministic formatting; Gemini is excluded from this phase.
-   - In a later phase, Gemini may optionally phrase an already validated answer. The evidence gate, facts, citations, and abstention decision remain application-controlled.
+   - Gemini may optionally frame an already validated answer. The evidence gate, facts, citations, and abstention decision remain application-controlled.
    - Cite the source plan and relevant document section in every answer; include the page when available.
    - When confidence is low or supporting evidence is missing, say that the answer cannot be established from the available documents instead of guessing.
    - The initial abstention rule is evidence-based: do not provide a requested value if the structured record or retrieved source does not support it with a traceable citation. Numeric confidence thresholds are **TBD** pending evaluation.
@@ -126,7 +126,7 @@ Users must authenticate before accessing the question-answering application. Fir
 - [ ] Every generated answer cites its source plan and document section, with page when available.
 - [ ] For low-confidence or unsupported questions, the tool reports insufficient evidence rather than guessing.
 - [ ] Per-query accuracy and latency are measured. Token usage is measured only if optional Gemini phrasing is enabled.
-- [ ] Initial answer flow is complete and evaluated without Gemini; any later Gemini integration is a separate phase and cannot weaken evidence, citation, or abstention behavior.
+- [ ] Initial answer flow is complete and evaluated without Gemini; optional Gemini integration is a separate phase and cannot weaken evidence, citation, or abstention behavior. The integration can be built before the baseline evaluation, but comparative quality claims remain **TBD** until measured.
 - [ ] The README explains chunking decisions, BM25 versus semantic retrieval results, extraction accuracy, and what would be done differently with a real budget.
 - [ ] Unauthenticated requests are rejected by the application server; authenticated users can access the question-answering flow.
 - [ ] Admin uploads are durable and start processing automatically; readiness, warning handling, restart recovery, and Retry work end to end without mandatory approval, and non-admin users cannot invoke admin operations.
