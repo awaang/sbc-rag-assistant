@@ -76,9 +76,10 @@ def install_fake_semantic_dependencies(monkeypatch):
         def encode(self, _texts, **_kwargs):
             return [[1.0, 0.0]]
 
-    get_model = lambda: Model()
-    get_model.cache_info = lambda: SimpleNamespace(currsize=1)
-    monkeypatch.setattr(retrieval, "_model", get_model)
+    load_model = lambda: Model()
+    load_model.cache_info = lambda: SimpleNamespace(currsize=1)
+    monkeypatch.setattr(retrieval, "_load_model", load_model)
+    monkeypatch.setattr(retrieval, "_model", load_model)
     monkeypatch.setattr(retrieval, "model_fingerprint", lambda: "fingerprint")
 
     numpy = ModuleType("numpy")

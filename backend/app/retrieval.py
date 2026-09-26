@@ -116,7 +116,7 @@ def retrieve(connection, question: str, method: str, strategy: str, top_k: int =
         import faiss
         import numpy as np
 
-        was_loaded = _model.cache_info().currsize > 0
+        was_loaded = _load_model.cache_info().currsize > 0
         model_started = time.perf_counter()
         fingerprint = model_fingerprint()
         sentence_model = _model()
