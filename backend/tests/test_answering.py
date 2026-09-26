@@ -26,6 +26,21 @@ def benefit(plan_id, value, status="verified", section_verified=True):
     }
 
 
+def test_short_insurer_names_resolve_plans():
+    plans = [
+        {"plan_id": 1, "insurer": "Aetna Health of California Inc.", "plan_name": "HMO - California", "plan_type": "hmo", "coverage_type": "medical"},
+        {"plan_id": 2, "insurer": "Aetna Life Insurance Company", "plan_name": "Open Access Managed Choice POS", "plan_type": "pos", "coverage_type": "medical"},
+        {"plan_id": 3, "insurer": "Kaiser Permanente", "plan_name": "Traditional Plan", "plan_type": "hmo", "coverage_type": "medical"},
+        {"plan_id": 4, "insurer": "Group Health Cooperative", "plan_name": "Multisite", "plan_type": "unknown", "coverage_type": "medical"},
+    ]
+    ids = lambda question: [plan["plan_id"] for plan in answering._matches(question, plans)]
+    assert ids("What is the Kaiser deductible?") == [3]
+    assert ids("What is the Aetna HMO deductible?") == [1]
+    assert ids("Aetna deductible") == [1, 2]
+    assert ids("Group Health deductible") == [4]
+    assert ids("What is the deductible?") == []
+
+
 def test_mixed_coverage_comparison_requires_clarification(monkeypatch):
     plans = [MEDICAL[0], {**MEDICAL[1], "coverage_type": "dental"}]
     monkeypatch.setattr(answering, "_approved_plans", lambda _connection: plans)

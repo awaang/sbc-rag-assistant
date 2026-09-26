@@ -27,6 +27,7 @@ NONE_DEDUCTIBLE = re.compile(r"\b(?:plan|drug)?\s*deductible\s*:\s*none\b", re.I
 COMPARISON = re.compile(r"\b(compare|comparison|difference|versus|vs\.?|between|across|both|higher|lower|more|less)\b", re.I)
 STOP_WORDS = {"a", "about", "and", "are", "at", "be", "benefit", "benefits", "can", "cost", "cover", "covered", "coverage", "do", "does", "for", "how", "i", "in", "include", "included", "is", "it", "many", "me", "much", "my", "of", "on", "plan", "plans", "please", "service", "services", "tell", "the", "their", "this", "to", "under", "what", "whether", "which", "with"}
 NAME_WORDS = {"plan", "plans", "summary", "benefit", "benefits", "coverage", "health", "insurance", "2017"}
+GENERIC_INSURER_WORDS = {"group", "the", "first", "united"}
 SERVICE_NAMES = (
     ("specialist", re.compile(r"specialist", re.I)),
     ("primary care", re.compile(r"primary care|primary doctor|pcp", re.I)),
@@ -44,6 +45,12 @@ def _display(plan: dict) -> str:
     return f"{plan['insurer']} {plan['plan_name']}".strip()
 
 
+def _brand(insurer: str) -> str:
+    """Short insurer name users type, e.g. "aetna" for "Aetna Life Insurance Company"."""
+    words = tokenize(insurer)
+    return " ".join(words[:2] if len(words) > 1 and words[0] in GENERIC_INSURER_WORDS else words[:1])
+
+
 def _matches(question: str, plans: list[dict]) -> list[dict]:
     normalized = f" {_fold(question)} "
     strong: list[dict] = []
@@ -53,7 +60,8 @@ def _matches(question: str, plans: list[dict]) -> list[dict]:
         plan_words = tokenize(plan["plan_name"])
         distinctive = [word for word in plan_words if word not in NAME_WORDS]
         name = " ".join(distinctive)
-        insurer = _fold(plan["insurer"])
+        full_insurer = _fold(plan["insurer"])
+        insurer = _brand(plan["insurer"]) if f" {full_insurer} " not in normalized else full_insurer
         full = _fold(_display(plan))
         type_alias = _fold(plan.get("plan_type") or "")
         coverage_alias = _fold(plan.get("coverage_type") or "")
@@ -70,8 +78,8 @@ def _matches(question: str, plans: list[dict]) -> list[dict]:
             strong.append(plan)
         elif insurer and f" {insurer} " in normalized:
             insurer_only.append(plan)
-    strong_insurers = {_fold(plan["insurer"]) for plan in strong}
-    return strong + [plan for plan in insurer_only if _fold(plan["insurer"]) not in strong_insurers]
+    strong_insurers = {_brand(plan["insurer"]) for plan in strong}
+    return strong + [plan for plan in insurer_only if _brand(plan["insurer"]) not in strong_insurers]
 
 
 def _category(question: str) -> str | None:
