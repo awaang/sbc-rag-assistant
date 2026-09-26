@@ -1,0 +1,44 @@
+{
+  "labels_version": "provisional-v1",
+  "notes": "Expected structured-extraction values per plan, authored from the source PDF text. network: in/out/null (null = document has one column or no network label). scope: individual, family, family_member (Kaiser 'each member in a family'), or null. value: a dollar amount or 'none'.",
+  "fields": [
+    {"source_document_id": "candidate-aetna-hmo-2017", "field": "deductible", "network": "in", "scope": "individual", "value": "none", "page": 1},
+    {"source_document_id": "candidate-aetna-hmo-2017", "field": "deductible", "network": "in", "scope": "family", "value": "none", "page": 1},
+    {"source_document_id": "candidate-aetna-hmo-2017", "field": "out_of_pocket_maximum", "network": "in", "scope": "individual", "value": "$2,500", "page": 1},
+    {"source_document_id": "candidate-aetna-hmo-2017", "field": "out_of_pocket_maximum", "network": "in", "scope": "family", "value": "$5,000", "page": 1},
+    {"source_document_id": "candidate-aetna-hmo-2017", "field": "er_cost_sharing", "network": "in", "scope": null, "value": "$100", "page": 2},
+    {"source_document_id": "candidate-aetna-hmo-2017", "field": "copay", "service": "primary care", "network": "in", "scope": null, "value": "$20", "page": 1},
+    {"source_document_id": "candidate-aetna-hmo-2017", "field": "copay", "service": "specialist", "network": "in", "scope": null, "value": "$20", "page": 2},
+
+    {"source_document_id": "candidate-aetna-oamc-2017", "field": "deductible", "network": "in", "scope": "individual", "value": "$300", "page": 1},
+    {"source_document_id": "candidate-aetna-oamc-2017", "field": "deductible", "network": "out", "scope": "individual", "value": "$600", "page": 1},
+    {"source_document_id": "candidate-aetna-oamc-2017", "field": "deductible", "network": "in", "scope": "family", "value": "$600", "page": 1},
+    {"source_document_id": "candidate-aetna-oamc-2017", "field": "deductible", "network": "out", "scope": "family", "value": "$1,200", "page": 1},
+    {"source_document_id": "candidate-aetna-oamc-2017", "field": "out_of_pocket_maximum", "network": "in", "scope": "individual", "value": "$2,800", "page": 1},
+    {"source_document_id": "candidate-aetna-oamc-2017", "field": "out_of_pocket_maximum", "network": "out", "scope": "individual", "value": "$5,600", "page": 1},
+    {"source_document_id": "candidate-aetna-oamc-2017", "field": "out_of_pocket_maximum", "network": "in", "scope": "family", "value": "$5,600", "page": 1},
+    {"source_document_id": "candidate-aetna-oamc-2017", "field": "out_of_pocket_maximum", "network": "out", "scope": "family", "value": "$11,200", "page": 1},
+    {"source_document_id": "candidate-aetna-oamc-2017", "field": "er_cost_sharing", "network": "in", "scope": null, "value": "$100", "page": 2},
+    {"source_document_id": "candidate-aetna-oamc-2017", "field": "copay", "service": "primary care", "network": "in", "scope": null, "value": "$15", "page": 2},
+    {"source_document_id": "candidate-aetna-oamc-2017", "field": "copay", "service": "specialist", "network": "in", "scope": null, "value": "$15", "page": 2},
+
+    {"source_document_id": "candidate-guardian-dental-ppo-2017", "field": "deductible", "network": null, "scope": null, "value": "$25", "page": 1},
+
+    {"source_document_id": "candidate-guardian-vsp-vision-2017", "field": "copay", "service": "first service", "network": null, "scope": null, "value": "$20", "page": 1},
+
+    {"source_document_id": "candidate-kaiser-traditional-2017", "field": "deductible", "network": null, "scope": "individual", "value": "none", "page": 1},
+    {"source_document_id": "candidate-kaiser-traditional-2017", "field": "deductible", "network": null, "scope": "family", "value": "none", "page": 1},
+    {"source_document_id": "candidate-kaiser-traditional-2017", "field": "out_of_pocket_maximum", "network": null, "scope": "individual", "value": "$1,500", "page": 1},
+    {"source_document_id": "candidate-kaiser-traditional-2017", "field": "out_of_pocket_maximum", "network": null, "scope": "family_member", "value": "$1,500", "page": 1},
+    {"source_document_id": "candidate-kaiser-traditional-2017", "field": "out_of_pocket_maximum", "network": null, "scope": "family", "value": "$3,000", "page": 1},
+    {"source_document_id": "candidate-kaiser-traditional-2017", "field": "er_cost_sharing", "network": null, "scope": null, "value": "$50", "page": 1},
+    {"source_document_id": "candidate-kaiser-traditional-2017", "field": "copay", "service": "primary care", "network": null, "scope": null, "value": "$30", "page": 1},
+    {"source_document_id": "candidate-kaiser-traditional-2017", "field": "copay", "service": "specialist", "network": null, "scope": null, "value": "$30", "page": 1},
+
+    {"source_document_id": "candidate-group-health-cooperative-wa-2017", "field": "deductible", "network": null, "scope": null, "value": "none", "page": 1},
+    {"source_document_id": "candidate-group-health-cooperative-wa-2017", "field": "out_of_pocket_maximum", "network": null, "scope": "individual", "value": "$2,000", "page": 1},
+    {"source_document_id": "candidate-group-health-cooperative-wa-2017", "field": "out_of_pocket_maximum", "network": null, "scope": "family", "value": "$4,000", "page": 1},
+    {"source_document_id": "candidate-group-health-cooperative-wa-2017", "field": "er_cost_sharing", "network": null, "scope": null, "value": "$100", "page": 2},
+    {"source_document_id": "candidate-group-health-cooperative-wa-2017", "field": "copay", "service": "office visit", "network": null, "scope": null, "value": "$20", "page": 1}
+  ]
+}

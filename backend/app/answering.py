@@ -8,7 +8,7 @@ import time
 from decimal import Decimal
 from typing import Any
 
-from app.retrieval import retrieve, tokenize
+from app.retrieval import approved_chunks, retrieve, tokenize
 
 CATEGORIES = (
     ("out_of_pocket_maximum", re.compile(r"out[- ]of[- ]pocket|out of pocket|oop max", re.I)),
@@ -25,7 +25,7 @@ LABELS = {
 VALUE = re.compile(r"\$\s?\d[\d,]*(?:\.\d{1,2})?|\b\d+(?:\.\d+)?\s?%|\bno charge\b|\bno deductible\b|\bnot covered\b", re.I)
 NONE_DEDUCTIBLE = re.compile(r"\b(?:plan|drug)?\s*deductible\s*:\s*none\b", re.I)
 COMPARISON = re.compile(r"\b(compare|comparison|difference|versus|vs\.?|between|across|both|higher|lower|more|less)\b", re.I)
-STOP_WORDS = {"a", "about", "and", "are", "at", "be", "benefit", "benefits", "can", "cost", "cover", "covered", "coverage", "do", "does", "for", "how", "i", "in", "include", "included", "is", "it", "many", "me", "much", "my", "of", "on", "plan", "plans", "please", "service", "services", "tell", "the", "their", "this", "to", "under", "what", "whether", "which", "with"}
+STOP_WORDS = {"a", "about", "amount", "and", "are", "at", "available", "be", "benefit", "benefits", "can", "cost", "cover", "covered", "coverage", "dental", "do", "does", "during", "for", "how", "i", "in", "include", "included", "including", "is", "it", "list", "listed", "many", "me", "medical", "member", "much", "my", "of", "on", "pay", "pays", "plan", "plans", "please", "say", "says", "service", "services", "tell", "the", "their", "this", "to", "under", "vision", "what", "whether", "which", "with"}
 NAME_WORDS = {"plan", "plans", "summary", "benefit", "benefits", "coverage", "health", "insurance", "2017"}
 GENERIC_INSURER_WORDS = {"group", "the", "first", "united"}
 SERVICE_NAMES = (
@@ -41,8 +41,16 @@ def _fold(value: str) -> str:
     return " ".join(tokenize(value))
 
 
+def _search_terms(value: str) -> set[str]:
+    """Normalize common written forms while keeping evidence matching lexical."""
+    normalized = re.sub(r"\bx[\s-]+rays?\b", "xray", value, flags=re.I)
+    return set(tokenize(normalized))
+
+
 def _display(plan: dict) -> str:
-    return f"{plan['insurer']} {plan['plan_name']}".strip()
+    insurer = str(plan["insurer"]).strip()
+    name = str(plan["plan_name"]).strip()
+    return name if name.lower().startswith(insurer.lower() + " ") else f"{insurer} {name}".strip()
 
 
 def _brand(insurer: str) -> str:
@@ -69,12 +77,19 @@ def _matches(question: str, plans: list[dict]) -> list[dict]:
                          if word not in NAME_WORDS and word not in insurer_words
                          and word not in {type_alias, coverage_alias}]
         acronym = "".join(word[0] for word in acronym_words) if len(acronym_words) >= 2 else ""
+        distinctive_aliases = [word for word in acronym_words if len(word) >= 3 and not any(
+            other["plan_id"] != plan["plan_id"] and _brand(other["insurer"]) == _brand(plan["insurer"])
+            and word in tokenize(other["plan_name"]) for other in plans)]
+        product_alias = bool(coverage_alias == "vision" and " vsp " in normalized and
+                             insurer and f" {insurer} " in normalized)
         qualified_insurer = bool(insurer and f" {insurer} " in normalized and (
             (type_alias not in {"", "unknown", "other"} and f" {type_alias} " in normalized) or
             (coverage_alias not in {"", "unknown", "medical"} and f" {coverage_alias} " in normalized)
         ))
         if ((name and f" {name} " in normalized) or (full and f" {full} " in normalized)
-                or (acronym and f" {acronym} " in normalized) or qualified_insurer):
+                or (insurer and f" {insurer} " in normalized and
+                    any(f" {word} " in normalized for word in distinctive_aliases))
+                or (acronym and f" {acronym} " in normalized) or qualified_insurer or product_alias):
             strong.append(plan)
         elif insurer and f" {insurer} " in normalized:
             insurer_only.append(plan)
@@ -86,6 +101,12 @@ def _category(question: str) -> str | None:
     return next((name for name, pattern in CATEGORIES if pattern.search(question)), None)
 
 
+def _bare_deductible_request(question: str) -> bool:
+    return bool(re.fullmatch(
+        r"(?:what(?: is|'s) (?:the |my )?|how much is (?:the |my )?)deductible\s*\??",
+        question.strip(), re.I))
+
+
 def _qualifiers(question: str) -> dict[str, str]:
     result = {}
     if re.search(r"out[- ]of[- ]network", question, re.I):
@@ -94,7 +115,7 @@ def _qualifiers(question: str) -> dict[str, str]:
         result["network"] = "in"
     if re.search(r"\bfamily\b", question, re.I):
         result["scope"] = "family"
-    elif re.search(r"\bindividual\b|per person", question, re.I):
+    elif re.search(r"\bindividual\b|per person|self[- ]only", question, re.I):
         result["scope"] = "individual"
     return result
 
@@ -110,7 +131,7 @@ def _dimensions(record: dict) -> tuple[str, str, str]:
         scope = wording.lower()
     network_key = "out" if re.search(r"out[- ]of[- ]network", network) else "in" if re.search(r"in[- ]network", network) else "unspecified"
     scope_key = "family" if "family" in scope else "individual" if re.search(r"individual|per person", scope) else "unspecified"
-    service_text = " ".join(str(dimensions.get(key) or "") for key in ("service", "visit_type")) or wording
+    service_text = " ".join(str(dimensions.get(key) or "") for key in ("service", "visit_type")).strip() or wording
     service = next((name for name, pattern in SERVICE_NAMES if pattern.search(service_text)), "unspecified")
     return network_key, scope_key, service
 
@@ -128,7 +149,8 @@ def _value(record: dict) -> str | None:
 def _usable_section(record: dict) -> bool:
     section = _fold(str(record.get("section") or ""))
     plan = _fold(str(record.get("plan_name") or ""))
-    if not section or section in {"plan title", "plan summary", "summary of benefits and coverage", plan}:
+    if not section or section in {"plan title", "plan summary", "summary of benefits and coverage",
+                                  "plan design benefits", "employees", plan}:
         return False
     return not (section.endswith(" plan") and not any(
         term in section for term in ("cost", "benefit", "coverage", "deductible")))
@@ -154,7 +176,7 @@ def _response(status: str, answer: str, plans: list[dict], path: str, started: f
               admin: bool = False) -> dict:
     debug: dict[str, Any] = {
         "evidence_path": path,
-        "corpus": "queryable provisional documents; SBC/public-source status unverified",
+        "corpus": "queryable ready SBC documents",
         "latency_ms": round((time.perf_counter() - started) * 1000, 1),
     }
     if admin:
@@ -162,6 +184,23 @@ def _response(status: str, answer: str, plans: list[dict], path: str, started: f
     return {"status": status, "answer": answer, "citations": citations or [],
             "matched_plans": [_display(plan) for plan in plans],
             "context_plan_ids": [plan["plan_id"] for plan in plans], "debug": debug}
+
+
+YEAR = re.compile(r"(?<![$\d,.])\b(?:19|20)\d{2}\b")
+
+
+def _unsupported_year(question: str, plans: list[dict]) -> str | None:
+    """Explain why a question about a specific year can't use these plan documents."""
+    asked = set(YEAR.findall(question)) - {year for plan in plans for year in YEAR.findall(_display(plan))}
+    if not asked:
+        return None
+    mismatched = [plan for plan in plans if str(plan.get("plan_year") or "") not in asked]
+    if not mismatched:
+        return None
+    years = ", ".join(sorted(asked))
+    reasons = "; ".join(f"{_display(plan)} covers plan year {plan['plan_year']}" if plan.get("plan_year")
+                        else f"{_display(plan)} has no recorded plan year" for plan in mismatched)
+    return f"I can’t establish {years} values from the available documents: {reasons}."
 
 
 def _approved_plans(connection) -> list[dict]:
@@ -204,7 +243,10 @@ def _numeric_answer(connection, question: str, plans: list[dict], category: str,
         if category == "deductible":
             drug_requested = bool(re.search(r"\b(?:drug|prescription|pharmacy)\b", question, re.I))
             plan_candidates = [row for row in plan_candidates
-                               if bool(re.search(r"\bdrug deductible\b", row["value_text"], re.I))
+                               if re.match(r"\s*(?:(?:in[- ]network|out[- ]of[- ]network)\s+)?"
+                                           r"(?:(?:individual|family)\s+)?(?:plan |drug )?deductible\b",
+                                           row["value_text"], re.I)
+                               and bool(re.search(r"\bdrug deductible\b", row["value_text"], re.I))
                                == drug_requested]
         candidates = plan_candidates
         if requested:
@@ -218,7 +260,10 @@ def _numeric_answer(connection, question: str, plans: list[dict], category: str,
             key not in requested or _dimensions(row)[index] in {wanted, "unspecified"}
             for key, wanted, index in (("network", requested.get("network"), 0),
                                        ("scope", requested.get("scope"), 1)) if wanted is not None
-        ) and (not requested_service or _dimensions(row)[2] in {requested_service, "unspecified"})]
+        ) and (not requested_service or _dimensions(row)[2] == requested_service or
+               (_dimensions(row)[2] == "unspecified" and
+                next(pattern for name, pattern in SERVICE_NAMES if name == requested_service).search(
+                    str(row.get("value_text") or "") + " " + str(row.get("section") or ""))))]
         usable = [row for row in candidates if row["verification_status"] in {"verified", "pending_review"}]
         if any(row["verification_status"] in {"conflicting", "ambiguous"} for row in relevant):
             reasons.append(f"{_display(plan)} has ambiguous or conflicting values for this question")
@@ -267,8 +312,7 @@ def _numeric_answer(connection, question: str, plans: list[dict], category: str,
         winners = [row["plan_name"] for row, amount in zip(selected, amounts) if amount[1] == target]
         comparison_text = (f"{', '.join(winners)} {'tie for the' if len(winners) > 1 else 'has the'} "
                            f"{'lowest' if lowest else 'highest'} {LABELS[category]}. ")
-    answer = (comparison_text + f"{LABELS[category].capitalize()} source wording: " + " ".join(lines) +
-              " These are from provisional documents; their SBC and public-source status is unverified.")
+    answer = comparison_text + f"{LABELS[category].capitalize()} source wording: " + " ".join(lines)
     result = _response("answered", answer, plans, "structured_benefits", started, citations,
                        details={"benefit_ids": [row["benefit_id"] for row in selected],
                                 "document_ids": [row["document_id"] for row in selected]}, admin=admin)
@@ -277,28 +321,71 @@ def _numeric_answer(connection, question: str, plans: list[dict], category: str,
         "category": LABELS[category],
         "comparison": comparison_text,
         "facts": [{"plan": row["plan_name"], "value": row["value_text"]} for row in selected],
-        "caveat": "These are from provisional documents; their SBC and public-source status is unverified.",
     }
     return result
+
+
+def _multi_numeric_answer(connection, question: str, plans: list[dict], started: float,
+                          admin: bool) -> dict | None:
+    categories = [name for name, pattern in CATEGORIES if pattern.search(question)]
+    if "er_cost_sharing" in categories:
+        categories = [name for name in categories if name != "copay"]
+    has_individual = bool(re.search(r"\bindividual\b|per person|self[- ]only", question, re.I))
+    has_family = bool(re.search(r"\bfamily\b", question, re.I))
+    scopes = [scope for scope, present in (("individual", has_individual), ("family", has_family)) if present]
+    has_out = bool(re.search(r"out[- ]of[- ]network", question, re.I))
+    has_in = bool(re.search(r"(?<!out[- ])in[- ]network", question, re.I))
+    networks = [network for network, present in (("in-network", has_in), ("out-of-network", has_out)) if present]
+    if len(categories) * max(1, len(scopes)) * max(1, len(networks)) <= 1:
+        return None
+    results = []
+    for category in categories:
+        for network in networks or [""]:
+            for scope in scopes or [""]:
+                subquery = " ".join(part for part in (network, scope, LABELS[category]) if part)
+                result = _numeric_answer(connection, subquery, plans, category, started, admin)
+                if result["status"] != "answered":
+                    return _response(result["status"], result["answer"], plans,
+                                     "structured_benefits", started,
+                                     details={"evidence_gate": "multi_part_missing", "failed_context": subquery},
+                                     admin=admin)
+                results.append((subquery, result))
+    citations = list({(citation["document"], citation["page"], citation["section"], citation["plan"]): citation
+                      for _, result in results for citation in result["citations"]}.values())
+    facts = [{"plan": fact["plan"], "value": f"{subquery.replace('-', ' ')}: {fact['value']}"}
+             for subquery, result in results for fact in result["_gemini_facts"]["facts"]]
+    answer = "Source wording: " + " ".join(f"{fact['plan']}: {fact['value']}." for fact in facts)
+    combined = _response("answered", answer, plans, "structured_benefits", started, citations,
+                         details={"contexts": [subquery for subquery, _ in results]}, admin=admin)
+    combined["_gemini_facts"] = {"kind": "numeric", "facts": facts}
+    return combined
 
 
 def _source_unit(chunk: dict, terms: set[str]) -> tuple[int, dict] | None:
     best = None
     plan_name = _fold(str(chunk.get("plan_name") or ""))
     for unit in (chunk.get("provenance") or {}).get("units", []):
+        if unit.get("kind") == "raw_line":
+            continue
         if unit.get("kind") == "table_row":
             headers = [str(value) for value in unit.get("headers") or []]
             cells = [str(value) for value in unit.get("cells") or []]
+            row_label = next((cell for cell in cells if cell and
+                              not re.search(r"\$|\d+\s?%|\b(?:copay applies|covered|not covered|amount over)\b",
+                                            cell, re.I)), "")
             wording = " | ".join(f"{headers[index] if index < len(headers) else 'Column'}: {cell}"
                                  for index, cell in enumerate(cells) if cell)
             detected_section = unit.get("section")
             section = (detected_section if detected_section and _usable_section({"section": detected_section,
                                                                                  "plan_name": chunk.get("plan_name")})
-                       else " | ".join(header for header in headers if header))
+                       else row_label or " | ".join(header for header in headers if header))
         else:
             wording = str(unit.get("text") or "")
             section = unit.get("section")
-        unit_terms = set(tokenize(wording))
+        # Include the detected section: questions may name a benefit category
+        # (for example, hospitalization) that appears in the heading rather
+        # than the source row itself. Keep the cited wording limited to the row.
+        unit_terms = _search_terms(f"{section} {wording}")
         overlap = len(terms & unit_terms)
         if not section or not wording or overlap < len(terms):
             continue
@@ -313,7 +400,7 @@ def _source_unit(chunk: dict, terms: set[str]) -> tuple[int, dict] | None:
         if document_title or (
                 plan_terms and plan_terms.issubset(section_terms)):
             continue
-        if not re.search(r"\b(covered|coverage|not covered|no charge|copay|coinsurance|deductible|limit|visit|per year)\b|\$|%", wording, re.I):
+        if not re.search(r"\b(covered|coverage|not covered|no charge|copay|coinsurance|deductible|limit|visit|per year|cost share|supply|allowance|discount|not applicable)\b|\$|%", wording, re.I):
             continue
         candidate = {"plan_name": chunk["plan_name"], "original_filename": chunk["original_filename"],
                      "section": str(section)[:240], "page_number": unit.get("page"),
@@ -328,51 +415,62 @@ def _source_unit(chunk: dict, terms: set[str]) -> tuple[int, dict] | None:
 def _coverage_answer(connection, question: str, plans: list[dict], all_plans: list[dict],
                      started: float, admin: bool, method_override: str | None = None,
                      strategy_override: str | None = None) -> dict:
-    excluded = set().union(*(set(tokenize(_display(plan))) for plan in all_plans))
-    terms = set(tokenize(question)) - STOP_WORDS - excluded
-    terms -= {"compare", "comparison", "difference", "versus", "vs", "between", "across", "both", "higher", "lower", "more", "less"}
-    if not terms or len(terms) > 4:
-        return _response("clarification_needed", "Which specific service or coverage item should I look for?", plans,
-                         "retrieved_source", started, admin=admin)
+    from app.source_catalog import build_catalog, select_passages, project_passage, terms
+
     method = method_override or os.getenv("ANSWER_RETRIEVAL_METHOD", "bm25")
     strategy = strategy_override or os.getenv("ANSWER_CHUNK_STRATEGY", "section_aware")
-    if method not in {"bm25", "semantic"} or strategy not in {"fixed_size", "section_aware"}:
+    if method not in {"bm25", "semantic", "hybrid"} or strategy not in {"fixed_size", "section_aware"}:
         raise ValueError("ANSWER_RETRIEVAL_METHOD or ANSWER_CHUNK_STRATEGY is invalid")
-    chosen = []
-    traces = []
+    chosen, traces = [], []
+    names = [value for plan in all_plans for value in
+             (_display(plan), plan["plan_name"], plan["insurer"], _brand(plan["insurer"]))]
+    names += [f"{_brand(plan['insurer'])} {plan['coverage_type']}" for plan in all_plans
+              if plan["coverage_type"] in {"dental", "vision"}]
     for plan in plans:
-        result = retrieve(connection, " ".join(sorted(terms)), method, strategy, top_k=10, plan_id=plan["plan_id"])
-        traces.append({"plan_id": plan["plan_id"], "index_status": result.get("index_status"),
-                       "timings": result["timings"],
+        ranked = retrieve(connection, question + " " + " ".join(sorted(terms(question))),
+                          method, strategy, top_k=50, plan_id=plan["plan_id"],
+                          include_source_context=True)
+        chunks = ranked.get("source_chunks", ranked["results"])
+        cards = build_catalog(chunks)
+        identity_names = []
+        for chunk in chunks:
+            for unit in (chunk.get("provenance") or {}).get("units", []):
+                text = " ".join(unit.get("cells", [])) if unit.get("kind") == "table_row" else unit.get("text", "")
+                if unit.get("page") == 1 and len(text) < 120 and re.search(r"\b(?:HMO|POS|PPO)\b", text) and not VALUE.search(text):
+                    identity_names.extend([text.strip(), re.sub(r"[®–-]", " ", text).strip()])
+        if method in {"semantic", "hybrid"}:
+            ids = {row["chunk_id"] for row in ranked["results"]}
+            cards = [card for card in cards if card.chunk_ids & ids]
+        selected, gate = select_passages(cards, question, names + identity_names)
+        traces.append({"plan_id": plan["plan_id"], "index_status": ranked.get("index_status"),
+                       "timings": ranked["timings"], "source_gate": gate,
                        "ranks": [{"chunk_id": row["chunk_id"], "rank": row["rank"], "score": row["score"]}
-                                 for row in result["results"]]})
-        candidates = [_source_unit(row, terms) for row in result["results"]]
-        candidates = [item for item in candidates if item]
-        if not candidates:
-            return _response("insufficient_evidence", "I can’t establish that coverage from a traceable source row in every requested ready document.",
+                                 for row in ranked["results"]]})
+        if not selected:
+            clarify = gate.get("reason") in {"conflicting_documents", "no_service_requested", "too_many_service_contexts"}
+            message = ("Please specify the service or document; the available source passages need more context."
+                       if clarify else "I can’t establish every requested detail from the available source passages.")
+            return _response("clarification_needed" if clarify else "insufficient_evidence", message,
                              plans, "retrieved_source", started,
                              details={"retrieval_method": method, "chunk_strategy": strategy, "retrieval": traces}, admin=admin)
-        table_pages = {item[1]["page_number"] for item in candidates if item[1]["kind"] == "table_row"}
-        candidates = [item for item in candidates
-                      if item[1]["kind"] == "table_row" or item[1]["page_number"] not in table_pages]
-        distinct_wording = {_fold(item[1]["wording"]) for item in candidates}
-        if len(distinct_wording) > 1:
-            return _response("clarification_needed", "Several source rows match that service with different wording. Specify a narrower service or network context.",
-                             plans, "retrieved_source", started,
-                             details={"retrieval_method": method, "chunk_strategy": strategy, "retrieval": traces,
-                                      "matching_chunk_ids": [item[1]["chunk_id"] for item in candidates]}, admin=admin)
-        chosen.append(max(candidates, key=lambda item: (item[0], -item[1]["rank"]))[1])
-    citations = [_citation(row) for row in chosen]
-    answer = "Source wording from queryable provisional documents: " + " ".join(
-        f"{row['plan_name']}: “{row['wording']}”" for row in chosen)
-    answer += " Their SBC and public-source status is unverified."
+        chosen.extend(project_passage(card, question) for card in selected)
+    citations = list({(c.filename, c.page, c.section): c.citation for c in chosen}.values())
+    display_names = {plan["plan_name"]: _display(plan) for plan in plans}
+    display_labels = {c.label: re.sub(r"\bPCP\b", "PCP (primary care physician)", c.label) for c in chosen}
+    quotes = [f"{display_names.get(c.plan_name, c.plan_name)} — {display_labels[c.label]}: “{c.wording}”" +
+              (f" Source qualification: “{c.context}”" if c.kind == "exclusion" else "") for c in chosen]
+    answer = "Source wording: " + " ".join(quotes)
+    if any("cost sharing is based on" in c.wording.lower() for c in chosen):
+        label = next(c.label.lower().replace(" ", "-") for c in chosen
+                     if "cost sharing is based on" in c.wording.lower())
+        answer = f"No single {label} price is listed here; the source states its conditions. " + answer
+    if any(re.search(r"\b2\s*x\b", c.wording) for c in chosen):
+        answer += " The source's 2 x cost share means twice the stated cost share."
     result = _response("answered", answer, plans, "retrieved_source", started, citations,
-                       details={"retrieval_method": method, "chunk_strategy": strategy, "retrieval": traces,
-                                "evidence_chunk_ids": [row["chunk_id"] for row in chosen]}, admin=admin)
+                       details={"retrieval_method": method, "chunk_strategy": strategy, "retrieval": traces}, admin=admin)
     result["_gemini_facts"] = {
-        "kind": "coverage",
-        "facts": [{"plan": row["plan_name"], "wording": row["wording"]} for row in chosen],
-        "caveat": "Their SBC and public-source status is unverified.",
+        "kind": "source_passages", "facts": [{"plan": c.plan_name, "wording": c.wording} for c in chosen],
+        "required_quotes": [c.wording for c in chosen] + [c.context for c in chosen if c.kind == "exclusion"],
     }
     return result
 
@@ -381,6 +479,7 @@ def answer_question(connection, question: str, context_plan_ids: list[int] | Non
                     previous_question: str | None = None, admin: bool = False,
                     method_override: str | None = None, strategy_override: str | None = None) -> dict:
     started = time.perf_counter()
+    question = re.sub(r"\bdeductable(s?)\b", r"deductible\1", question, flags=re.I)
     plans = _approved_plans(connection)
     if not plans:
         return _response("insufficient_evidence", "No ready plan documents are available yet.", [],
@@ -414,19 +513,34 @@ def answer_question(connection, question: str, context_plan_ids: list[int] | Non
         return _response("clarification_needed", "Please name one plan, or ask to compare these plans: " +
                          "; ".join(_display(plan) for plan in selected) + ".", [], "plan_resolution", started,
                          details={"candidate_plan_ids": [plan["plan_id"] for plan in selected]}, admin=admin)
-    if comparison and len(selected) < 2:
+    network_comparison = bool(re.search(r"in[- ]network.*(?:versus|vs\.?|and).*out[- ]of[- ]network", question, re.I))
+    if comparison and len(selected) < 2 and not network_comparison:
         return _response("clarification_needed", "Name at least two plans to compare, or ask to compare across all ready plans.",
                          selected, "plan_resolution", started, admin=admin)
     if comparison and len({plan["coverage_type"] for plan in selected}) > 1:
         return _response("clarification_needed", "These plans have different coverage types (medical, dental, or vision). Name plans with the same coverage type to compare.",
                          selected, "plan_resolution", started, admin=admin)
+    year_gap = _unsupported_year(question, selected)
+    if year_gap:
+        return _response("insufficient_evidence", year_gap, selected, "plan_year", started,
+                         details={"evidence_gate": "plan_year_mismatch"}, admin=admin)
     category = _category(question)
-    followup = bool(re.match(r"^(what about|how about|and\b|for\b)", question.strip(), re.I)) or not re.match(
-        r"^(what|how|does|do|is|are|can|which|compare|tell)\b", question.strip(), re.I)
+    followup = bool(re.match(r"^(what about|how about|and\b|for\b)", question.strip(), re.I))
     if not category and previous_question and len(question.split()) <= 8 and (followup or COMPARISON.search(question)):
         category = _category(previous_question)
-        question = previous_question + " " + question
-    if category:
+    # Structured records remain authoritative for a single numerical dimension
+    # and ordered comparisons. Service descriptions and compound requests use
+    # complete source passages with their column context and qualifications.
+    multi_context = (len([name for name, pattern in CATEGORIES if pattern.search(question)]) > 1
+                     or bool(re.search(r"individual.*family|self.only.*family|in.network.*out.of.network", question, re.I)))
+    numeric_lookup = bool(category and not multi_context and not _bare_deductible_request(question) and (
+        (category == "deductible" and not re.search(r"happens|waiv|meet|combine|carryover", question, re.I)) or
+        (category == "copay" and _qualifiers(question)) or
+        re.search(r"\b(lower|higher|less|more)\b", question, re.I)))
+    if numeric_lookup:
+        composite = _multi_numeric_answer(connection, question, selected, started, admin)
+        if composite is not None:
+            return composite
         return _numeric_answer(connection, question, selected, category, started, admin)
     return _coverage_answer(connection, question, selected, plans, started, admin,
                             method_override, strategy_override)

@@ -137,3 +137,50 @@ def test_kaiser_candidates_use_benefit_sections_instead_of_column_headers():
     assert {item.section for item in deductible} == {"Out-of-Pocket Maximum(s) and Deductible(s)"}
     assert len(emergency) == 1
     assert emergency[0].section == "Emergency Health Coverage You Pay"
+
+
+def _table_page(page_number, headers, rows, row_sections=None, section_heading=None):
+    return {"page_number": page_number, "text": "", "section_heading": section_heading,
+            "tables": [{"headers": headers, "header_row_index": 0 if headers else None,
+                        "rows": ([headers] if headers else []) + rows, "row_sections": row_sections or []}]}
+
+
+def test_no_annual_deductible_is_a_none_value():
+    candidates = extract_candidates([_table_page(1, ["Benefits", "Inside Network"],
+                                                 [["Plan deductible", "No annual deductible"]])])
+    assert [(c.category, c.value_text) for c in candidates] == [("deductible", "Plan deductible: No annual deductible")]
+
+
+def test_emergency_services_row_is_er_cost_sharing_not_a_copay():
+    candidates = extract_candidates([_table_page(1, ["Benefits", "", "Inside Network"],
+                                                 [["Emergency services (copay waived if admitted)", "", "$100 copay"]])])
+    assert {c.category for c in candidates} == {"er_cost_sharing"}
+
+
+def test_flat_amount_per_primary_care_or_specialist_visit_is_a_copay():
+    candidates = extract_candidates([{"page_number": 1, "text": (
+        "Most Primary Care Visits ........ $30 per visit\n"
+        "Most Physician Specialist Visits ........ $30 per visit")}])
+    assert [c.category for c in candidates] == ["copay", "copay"]
+    assert all(c.status == "pending_review" for c in candidates)
+
+
+def test_out_of_network_reimbursement_amounts_are_not_copays():
+    candidates = extract_candidates([_table_page(1, ["", "In-Network", "Out-Of-Network"],
+                                                 [["Eye exams", "$10 copay", "Amount over: $50.00"]])])
+    assert [(c.value_text.rsplit(": ", 1)[1], c.dimensions.get("network")) for c in candidates] == [("$10", "IN-NETWORK")]
+
+
+def test_table_continued_on_next_page_keeps_network_headers_and_section():
+    headers = ["", "PHYSICIAN SERVICES", "IN-NETWORK", "OUT-OF-NETWORK"]
+    candidates = extract_candidates([
+        _table_page(1, headers, [["", "Primary Care Visits", "$20 copay", "40%"]],
+                    row_sections=["PHYSICIAN SERVICES", "PHYSICIAN SERVICES"]),
+        _table_page(2, [], [["", "Specialist Office Visits", "$30 copay", "40%"]],
+                    row_sections=["PLAN DESIGN & BENEFITS"]),
+    ])
+    specialist = [c for c in candidates if c.page_number == 2]
+    assert {(c.value_text, c.dimensions.get("network"), c.section) for c in specialist} == {
+        ("Specialist Office Visits: $30", "IN-NETWORK", "PHYSICIAN SERVICES"),
+        ("Specialist Office Visits: 40%", "OUT-OF-NETWORK", "PHYSICIAN SERVICES"),
+    }

@@ -23,12 +23,14 @@ class BenefitCandidate:
 
 _CATEGORY_PATTERNS: tuple[tuple[Category, re.Pattern[str]], ...] = (
     ("out_of_pocket_maximum", re.compile(r"out[- ]of[- ]pocket maximum|out[- ]of[- ]pocket limit|maximum out[- ]of[- ]pocket|payment limit", re.I)),
-    ("er_cost_sharing", re.compile(r"emergency room|emergency department|emergency medical", re.I)),
+    ("er_cost_sharing", re.compile(r"emergency room|emergency department|emergency medical|emergency services?\b", re.I)),
     ("deductible", re.compile(r"deductible", re.I)),
-    ("copay", re.compile(r"copay|co-pay|office visit", re.I)),
+    ("copay", re.compile(r"copay|co-pay|office visit|(?:primary care|specialist) visits?\b", re.I)),
 )
 _MONEY = re.compile(r"(?:\$\s?\d[\d,]*(?:\.\d{2})?|\d+(?:%|\s?percent)|no charge|\$?0(?:\.00)?)", re.I)
-_TABLE_VALUE = re.compile(r"\$\s?\d[\d,]*(?:\.\d{1,2})?|\d+(?:\.\d+)?\s?%|no charge|no deductible|not covered|none", re.I)
+_TABLE_VALUE = re.compile(r"\$\s?\d[\d,]*(?:\.\d{1,2})?|\d+(?:\.\d+)?\s?%|no charge|no (?:annual |calendar[- ]year )?deductible|not covered|none", re.I)
+# Out-of-network reimbursement schedules are not member cost sharing.
+_REIMBURSEMENT = re.compile(r"amount over|\bup to\b|reimburse|allowance", re.I)
 _PERIOD = re.compile(r"per\s+(calendar\s+year|year|month|visit|admission)", re.I)
 
 
@@ -39,7 +41,7 @@ def _category(text: str, *, benefit_label: bool = False) -> Category | None:
         return "er_cost_sharing"
     if benefit_label and re.search(r"\bdeductible\b", text, re.I):
         return "deductible"
-    if re.search(r"copay|co-pay|office visit", text, re.I):
+    if _CATEGORY_PATTERNS[3][1].search(text):
         return "copay"
     return None
 
@@ -64,18 +66,35 @@ def _scope(text: str) -> str | None:
     return None
 
 
-def _table_candidate_rows(page: dict) -> list[BenefitCandidate]:
-    """Recover benefit values from table rows plus nearby continuation context."""
+def _table_candidate_rows(page: dict, carried: dict[int, tuple[list[str], str | None]] | None = None) -> list[BenefitCandidate]:
+    """Recover benefit values from table rows plus nearby continuation context.
+
+    ``carried`` maps a column count to the last column headers and row section
+    seen in the document, so a table continued on the next page without its
+    header row keeps its network columns and section.
+    """
     candidates: list[BenefitCandidate] = []
     page_number = int(page["page_number"])
+    carried = {} if carried is None else carried
     for table in page.get("tables") or []:
         active_category: Category | None = None
         active_label = ""
         active_period: str | None = None
         table_candidates: list[BenefitCandidate] = []
         headers = [str(value or "") for value in table.get("headers", [])]
+        width = max((len(row) for row in table.get("rows") or []), default=0)
+        continued = not any(headers) and width in carried
         row_sections = table.get("row_sections") or []
         for row_number, row_headers, row in iter_table_rows(table):
+            row_section = row_sections[row_number - 1] if row_number <= len(row_sections) else None
+            if any(row_headers) and len(row_headers) == width:
+                carried[width] = (list(row_headers), row_section)
+                continued = False
+            elif continued:
+                # Rows before the continued table's first heading still belong
+                # to the section open at the end of the previous page.
+                row_headers, carried_section = carried[width]
+                row_section = carried_section or row_section
             cells = [str(value or "").strip() for value in row]
             row_text = " ".join(cell for cell in cells if cell)
             if not row_text:
@@ -118,7 +137,7 @@ def _table_candidate_rows(page: dict) -> list[BenefitCandidate]:
                 if continuation and not re.search(r"\b(individual|family|per person)\b", cell, re.I):
                     continue
                 matches = list(_TABLE_VALUE.finditer(cell))
-                if not matches:
+                if not matches or (category == "copay" and _REIMBURSEMENT.search(cell)):
                     continue
                 header = row_headers[cell_index] if cell_index < len(row_headers) else ""
                 if not header and cell_index < len(headers):
@@ -155,8 +174,10 @@ def _table_candidate_rows(page: dict) -> list[BenefitCandidate]:
                         wording += f" {dimensions[scope]}"
                     if period:
                         wording += f" (per {period})"
-                    detected_section = (row_sections[row_number - 1] if row_number <= len(row_sections) else None)
-                    detected_section = detected_section or page.get("section_heading")
+                    detected_section = row_section or page.get("section_heading")
+                    if not detected_section:
+                        if cells[0] and not _TABLE_VALUE.search(cells[0]):
+                            detected_section = cells[0][:240]
                     if not detected_section:
                         context_headers = [value for value in row_headers or headers if value.strip() and
                                            not re.fullmatch(r"(?:in|out)[- ]of[- ]network|in[- ]network", value.strip(), re.I)]
@@ -194,9 +215,10 @@ def extract_candidates(pages: list[dict]) -> list[BenefitCandidate]:
     """
     candidates: list[BenefitCandidate] = []
     seen: set[tuple[Category, int, str]] = set()
+    carried: dict[int, tuple[list[str], str | None]] = {}
     for page in pages:
         page_number = int(page["page_number"])
-        table_candidates = _table_candidate_rows(page)
+        table_candidates = _table_candidate_rows(page, carried)
         candidates.extend(table_candidates)
         table_categories = {candidate.category for candidate in table_candidates}
         text_sections = {unit.provenance["line"]: unit.section

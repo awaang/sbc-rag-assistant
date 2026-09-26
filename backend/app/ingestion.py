@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections import Counter
 from io import BytesIO
 import re
 from typing import Any
@@ -107,6 +108,10 @@ def _line_inside_table(line: dict[str, Any], table: dict[str, Any]) -> bool:
     return x0 <= mid_x <= x1 and top <= mid_y <= bottom
 
 
+def _word_counts(text: str) -> Counter[str]:
+    return Counter(re.findall(r"[a-z0-9]+", text.lower()))
+
+
 def parse_pdf(pdf_bytes: bytes) -> list[dict[str, Any]]:
     """Return page text and table cells without discarding table structure."""
     parsed: list[dict[str, Any]] = []
@@ -184,23 +189,35 @@ def _units(pages: list[dict[str, Any]]) -> list[Unit]:
         text_lines = page.get("text_lines")
         if text_lines is None:
             text_lines = [{"text": line} for line in page["text"].splitlines()]
+        outside = [line for line in text_lines if not (
+            "top" in line and any(_line_inside_table(line, table) for table in page["tables"]))]
+        represented = _word_counts(" ".join(line["text"] for line in outside))
+        represented.update(_word_counts(" ".join(
+            cell for table in page["tables"] for row in table["rows"] for cell in row)))
+        missing = _word_counts(page["text"]) - represented
         for line_number, line in enumerate(text_lines, 1):
             if "top" in line and any(_line_inside_table(line, table) for table in page["tables"]):
-                continue
-            events.append((float(line.get("top", line_number)), 0, line_number, "text", line["text"]))
+                # Table geometry occasionally swallows footer text or splits a
+                # word across cells. Retain the original line as provenance.
+                if not (set(_word_counts(line["text"])) & set(missing)):
+                    continue
+                kind = "raw_line"
+            else:
+                kind = "text"
+            events.append((float(line.get("top", line_number)), 0, line_number, kind, line["text"]))
         for table_number, table in enumerate(page["tables"], 1):
             for row_number, headers, row in iter_table_rows(table):
                 tops = table.get("row_tops") or []
                 top = tops[row_number - 1] if row_number <= len(tops) else len(text_lines) + table_number + row_number / 1000
                 events.append((float(top), 1, table_number, "table", (table_number, row_number, headers, row)))
         for _, _, index, kind, payload in sorted(events):
-            if kind == "text":
+            if kind in {"text", "raw_line"}:
                 line = " ".join(payload.split())
                 if not line:
                     continue
-                if _is_heading(line):
+                if kind == "text" and _is_heading(line):
                     section = line
-                units.append(Unit(line, page_number, section, {"kind": "text", "line": index,
+                units.append(Unit(line, page_number, section, {"kind": kind, "line": index,
                                                               "text": line}))
                 continue
             table_number, row_number, headers, row = payload

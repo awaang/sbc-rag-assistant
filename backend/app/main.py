@@ -108,7 +108,7 @@ class ChatRequest(BaseModel):
 
 
 class AnswerPreviewRequest(ChatRequest):
-    method: Literal["bm25", "semantic"]
+    method: Literal["bm25", "semantic", "hybrid"]
     chunk_strategy: Literal["fixed_size", "section_aware"]
 
 
@@ -145,7 +145,7 @@ class DocumentReview(BaseModel):
 
 class RetrievalRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
-    method: Literal["bm25", "semantic"]
+    method: Literal["bm25", "semantic", "hybrid"]
     chunk_strategy: Literal["fixed_size", "section_aware"]
     strategy_version: int = Field(default=1, ge=1)
     top_k: int = Field(default=5, ge=1, le=20)
@@ -159,6 +159,7 @@ class EvaluationQuestion(BaseModel):
     question: str
     question_type: str
     expected_answer: str
+    expected_status: Literal["answered", "insufficient_evidence", "clarification_needed"] = "answered"
     expected_document_ids: list[int] = Field(default_factory=list)
     expected_document_sha256s: list[str] = Field(default_factory=list)
     expected_pages: list[int] = Field(default_factory=list)
@@ -166,7 +167,8 @@ class EvaluationQuestion(BaseModel):
 
     @model_validator(mode="after")
     def require_document_label(self):
-        if not self.expected_document_ids and not self.expected_document_sha256s:
+        if (self.expected_status == "answered"
+                and not self.expected_document_ids and not self.expected_document_sha256s):
             raise ValueError("Each evaluation question needs an expected document ID or source-file SHA-256.")
         return self
 
@@ -184,7 +186,7 @@ def run_retrieval(connection, request: RetrievalRequest) -> dict:
         raise HTTPException(status_code=503, detail="Retrieval model unavailable or initialization/execution failed.") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if request.method == "semantic" and result.get("index_status") == "no_approved_embeddings":
+    if request.method in {"semantic", "hybrid"} and result.get("index_status") == "no_approved_embeddings":
         result["index_status"] = "no_approved_embeddings; run python -m app.pipeline locally"
     return result
 
@@ -232,12 +234,23 @@ def get_evaluation(
             "runs": [dict(row) for row in runs]}
 
 
+@app.get("/api/admin/evaluation/report")
+def get_evaluation_report(_admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    report_path = Path(__file__).resolve().parents[2] / "evaluation" / "results" / "latest.json"
+    try:
+        return json.loads(report_path.read_bytes())
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="No offline report yet. Run python -m app.evaluate --gemini.") from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=503, detail="Offline evaluation report is unreadable.") from exc
+
+
 @app.post("/api/admin/evaluation/run")
 def run_evaluation(
     _admin: Annotated[dict, Depends(require_admin)],
     connection: Annotated[psycopg.Connection, Depends(database_connection)],
     top_k: int = 5,
-    method: Literal["all", "bm25", "semantic"] = "all",
+    method: Literal["all", "bm25", "semantic", "hybrid"] = "all",
 ) -> dict:
     if not 1 <= top_k <= 20:
         raise HTTPException(status_code=422, detail="top_k must be between 1 and 20.")
@@ -246,6 +259,8 @@ def run_evaluation(
         manifest_bytes = manifest_path.read_bytes()
         manifest = json.loads(manifest_bytes)
         questions = [EvaluationQuestion.model_validate(item) for item in manifest.get("questions", [])]
+        # Abstention and clarification questions have no target passage to rank.
+        questions = [item for item in questions if item.expected_status == "answered"]
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise HTTPException(status_code=503, detail="Evaluation manifest is unavailable or invalid.") from exc
     if not questions:
@@ -262,10 +277,10 @@ def run_evaluation(
     counts = {row["chunk_strategy"]: row["chunk_count"] for row in readiness}
     if any(counts.get(strategy, 0) == 0 for strategy in ("fixed_size", "section_aware")):
         raise HTTPException(status_code=409, detail="Approved strategy-version-1 chunks must exist for both chunk strategies before evaluation.")
-    methods = ("bm25", "semantic") if method == "all" else (method,)
+    methods = ("bm25", "semantic", "hybrid") if method == "all" else (method,)
     initialization_ms = 0.0
     fingerprint = None
-    if "semantic" in methods:
+    if {"semantic", "hybrid"} & set(methods):
         model_init_start = time.perf_counter()
         try:
             fingerprint = model_fingerprint()
@@ -376,10 +391,10 @@ def run_evaluation(
                     (manifest["manifest_version"], method, strategy, top_k, n, hits,
                      timing_means["total_request_ms"], mrr,
                      manifest_sha256,
-                     MODEL_NAME if method == "semantic" else None,
-                     MODEL_VERSION if method == "semantic" else None,
-                     psycopg.types.json.Jsonb(corpus_snapshot), fingerprint if method == "semantic" else None,
-                     initialization_ms if method == "semantic" else 0.0, strategy_version,
+                     MODEL_NAME if method != "bm25" else None,
+                     MODEL_VERSION if method != "bm25" else None,
+                     psycopg.types.json.Jsonb(corpus_snapshot), fingerprint if method != "bm25" else None,
+                     initialization_ms if method != "bm25" else 0.0, strategy_version,
                      timing_means["corpus_load_ms"], timing_means["embedding_load_ms"],
                      timing_means["index_build_ms"], timing_means["query_embedding_ms"],
                      timing_means["model_load_ms"], timing_means["search_ms"]),

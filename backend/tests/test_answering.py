@@ -1,11 +1,8 @@
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
 
 from app import answering
-from app.benefits import extract_candidates
-from app.ingestion import build_chunks, parse_pdf
 from app.retrieval import retrieve
 
 
@@ -39,6 +36,36 @@ def test_short_insurer_names_resolve_plans():
     assert ids("Aetna deductible") == [1, 2]
     assert ids("Group Health deductible") == [4]
     assert ids("What is the deductible?") == []
+
+
+def test_guardian_product_names_resolve_their_own_plan():
+    plans = [
+        {"plan_id": 1, "insurer": "Guardian", "plan_name": "Guardian DentalGuard Preferred PPO",
+         "plan_type": "ppo", "coverage_type": "dental"},
+        {"plan_id": 2, "insurer": "Guardian", "plan_name": "Guardian VSP Vision",
+         "plan_type": "unknown", "coverage_type": "vision"},
+    ]
+    assert [plan["plan_id"] for plan in answering._matches("Guardian DentalGuard Preferred", plans)] == [1]
+    assert [plan["plan_id"] for plan in answering._matches("Guardian VSP frames", plans)] == [2]
+
+
+def test_compound_source_rows_from_conflicting_documents_require_review(monkeypatch):
+    plan = MEDICAL[0]
+    chunks = [{"chunk_id": index, "document_id": index, "plan_id": 1,
+               "plan_name": "Basic", "original_filename": f"plan-{index}.pdf",
+               "provenance": {"units": [{"kind": "table_row", "page": 1,
+                                         "section": "EMERGENCY CARE", "headers": ["Service", "You Pay"],
+                                         "cells": ["Emergency Room", f"${amount} copay"]}]}}
+              for index, amount in ((1, 100), (2, 200))]
+    monkeypatch.setattr(answering, "_approved_plans", lambda _connection: [plan])
+    monkeypatch.setattr(answering, "approved_chunks", lambda *_args, **_kwargs: chunks)
+    monkeypatch.setattr(answering, "retrieve", lambda *_args, **_kwargs: {
+        "results": [{**chunk, "rank": index, "score": 1.0} for index, chunk in enumerate(chunks, 1)],
+        "timings": {},
+    })
+    result = answering.answer_question(None, "What is the emergency room cost?")
+    assert result["status"] == "clarification_needed"
+    assert result["citations"] == []
 
 
 def test_mixed_coverage_comparison_requires_clarification(monkeypatch):
@@ -182,14 +209,14 @@ def test_comparison_clarifies_when_benefit_dimensions_differ(monkeypatch):
     assert "different network" in result["answer"]
 
 
-def test_table_citation_prefers_column_context_over_page_title():
+def test_table_citation_uses_service_label_when_page_section_is_title():
     chunk = {"plan_name": "Basic", "original_filename": "plan.pdf", "chunk_id": 1,
              "rank": 1, "score": 1.0, "provenance": {"units": [{
                  "kind": "table_row", "page": 2, "section": "PLAN TITLE",
                  "headers": ["Benefits", "In Network"], "cells": ["Urgent care", "$20 copay"],
              }]}}
     result = answering._source_unit(chunk, {"urgent", "care"})
-    assert result[1]["section"] == "Benefits | In Network"
+    assert result[1]["section"] == "Urgent care"
 
 
 def test_text_citation_rejects_plan_title_as_section():
@@ -215,44 +242,8 @@ def test_text_citation_keeps_relevant_benefit_section():
     assert result[1]["section"] == "URGENT CARE"
 
 
-def test_kaiser_pdf_flows_through_bm25_and_cited_answers():
-    source_pdf = (Path(__file__).resolve().parents[2] /
-                  "data/source-documents/received/Kaiser HMO Plan Summary 2017.pdf")
-    pages = parse_pdf(source_pdf.read_bytes())
-    plan = {"plan_id": 1, "insurer": "Kaiser Permanente", "plan_name": "Traditional Plan",
-            "plan_type": "hmo", "coverage_type": "medical", "plan_year": 2017}
-    chunks = [{"chunk_id": index, "document_id": 1, "plan_id": 1,
-               "plan_name": plan["plan_name"], "original_filename": source_pdf.name,
-               "chunk_text": chunk["text"], "page_start": chunk["page_start"],
-               "page_end": chunk["page_end"], "provenance": chunk["provenance"]}
-              for index, chunk in enumerate(build_chunks(pages)["section_aware"], 1)]
-    benefits = [{"benefit_id": index, "plan_id": 1, "category": candidate.category,
-                 "value_text": candidate.value_text, "dimensions": candidate.dimensions,
-                 "verification_status": candidate.status, "reviewed_at": None,
-                 "source_section_verified": False, "section": candidate.section,
-                 "page_number": candidate.page_number, "parse_status": "parsed",
-                 "document_id": 1, "original_filename": source_pdf.name,
-                 "plan_name": plan["plan_name"]}
-                for index, candidate in enumerate(extract_candidates(pages), 1)]
-
-    class Result:
-        def __init__(self, rows):
-            self.rows = rows
-
-        def fetchall(self):
-            return self.rows
-
-    class Connection:
-        def execute(self, sql, params=()):
-            if "FROM plans p JOIN documents" in sql:
-                return Result([plan])
-            if "FROM benefit_records b" in sql:
-                return Result([row for row in benefits if row["category"] == params[1]])
-            if "FROM chunks c JOIN documents d" in sql:
-                return Result(chunks)
-            raise AssertionError(sql)
-
-    connection = Connection()
+def test_kaiser_pdf_flows_through_bm25_and_cited_answers(kaiser_connection):
+    connection = kaiser_connection
     search = retrieve(connection, "urgent care", "bm25", "section_aware", top_k=10)
     assert search["results"]
     assert any("Urgent care consultations" in row["chunk_text"] for row in search["results"])
@@ -292,3 +283,22 @@ def test_none_only_counts_when_stated_as_a_deductible_value():
     assert answering._value({"category": "deductible", "value_text": "None of these; deductible: $500"}) == "$500"
     assert answering._value({"category": "copay", "value_text": "None of these copays apply"}) is None
     assert answering._ordered_value("none") is None
+
+
+@pytest.mark.parametrize("plan_year, status", [(2017, "insufficient_evidence"), (None, "insufficient_evidence"),
+                                               (2019, "answered")])
+def test_question_year_must_match_the_plan_year(monkeypatch, plan_year, status):
+    plan = {**MEDICAL[0], "plan_year": plan_year}
+    monkeypatch.setattr(answering, "_approved_plans", lambda _connection: [plan])
+    monkeypatch.setattr(answering, "_benefits", lambda *_args: [benefit(1, "$500")])
+    result = answering.answer_question(None, "What is the Basic deductible for 2019?")
+    assert result["status"] == status
+    if status != "answered":
+        assert "2019" in result["answer"] and result["citations"] == []
+
+
+def test_dollar_amounts_are_not_mistaken_for_years(monkeypatch):
+    plan = {**MEDICAL[0], "plan_year": 2017}
+    monkeypatch.setattr(answering, "_approved_plans", lambda _connection: [plan])
+    monkeypatch.setattr(answering, "_benefits", lambda *_args: [benefit(1, "$2000")])
+    assert answering.answer_question(None, "Is the Basic deductible $2000?")["status"] == "answered"

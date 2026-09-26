@@ -6,13 +6,13 @@ import pytest
 from app import gemini
 
 
-def _result(status="answered", answer="Deductible source wording: Plan A: $1,500 per person.", facts=True):
+def _result(status="answered", answer="Deductible source wording: Plan A: $1,500 per person.", facts=True,
+            kind="source_passages"):
     result = {"status": status, "answer": answer, "citations": [], "matched_plans": ["Plan A"],
               "context_plan_ids": [1], "debug": {"latency_ms": 5.0}}
     if facts:
-        result["_gemini_facts"] = {"kind": "numeric", "category": "deductible", "comparison": "",
-                                   "facts": [{"plan": "Plan A", "value": "$1,500 per person"}],
-                                   "caveat": "These are from provisional documents."}
+        result["_gemini_facts"] = {"kind": kind, "category": "deductible", "comparison": "",
+                                   "facts": [{"plan": "Plan A", "value": "$1,500 per person"}]}
     return result
 
 
@@ -38,19 +38,30 @@ def gemini_reply(monkeypatch):
 
 
 def test_uses_gemini_answer_when_values_are_preserved(gemini_reply):
-    gemini_reply("Plan A has a deductible of $1,500 per person. These come from provisional documents.")
+    gemini_reply("Plan A has a deductible of $1,500 per person.")
     result = gemini.phrase_answer(_result())
     assert result["answer"].startswith("Plan A has a deductible of $1,500")
     assert result["debug"]["phrasing"] == "gemini"
     assert result["debug"]["gemini_tokens"]["total"] == 15
 
 
-def test_gemini_writes_abstention_replies_without_changing_status(gemini_reply):
+@pytest.mark.parametrize("status", ["insufficient_evidence", "clarification_needed"])
+def test_abstention_and_clarification_skip_gemini(gemini_reply, status):
     calls = gemini_reply("I couldn't find that value in the available plan documents.")
-    result = gemini.phrase_answer(_result("insufficient_evidence", "I can’t establish the requested value.", facts=False))
-    assert result["status"] == "insufficient_evidence"
-    assert result["answer"] == "I couldn't find that value in the available plan documents."
-    assert json.loads(calls[0]["contents"][0]["parts"][0]["text"])["status"] == "insufficient_evidence"
+    result = gemini.phrase_answer(_result(status, "I can’t establish the requested value.", facts=False))
+    assert result["status"] == status
+    assert result["answer"] == "I can’t establish the requested value."
+    assert result["debug"]["gemini_status"] == "skipped_no_answer"
+    assert calls == []
+
+
+def test_structured_answer_skips_gemini(gemini_reply):
+    calls = gemini_reply("Plan A has a deductible of $1,500 per person.")
+    result = gemini.phrase_answer(_result(kind="numeric"))
+    assert result["answer"] == _result()["answer"]
+    assert result["debug"]["gemini_status"] == "skipped_structured_answer"
+    assert result["debug"]["phrasing"] == "deterministic"
+    assert calls == []
 
 
 def test_invented_number_falls_back_to_deterministic_answer(gemini_reply):
@@ -65,6 +76,18 @@ def test_missing_checked_value_falls_back(gemini_reply):
     gemini_reply("Plan A has a deductible.")
     result = gemini.phrase_answer(_result())
     assert result["debug"]["phrasing"] == "deterministic"
+
+
+def test_omitted_admission_exception_falls_back(gemini_reply):
+    gemini_reply("The emergency room copay is $100.")
+    result = _result(answer="The emergency room copay is $100; waived if admitted.")
+    result["_gemini_facts"] = {
+        "kind": "coverage", "facts": [{"plan": "Plan A", "wording": "$100 copay; waived if admitted"}],
+        "required_terms": ["waived", "admitted"],
+    }
+    phrased = gemini.phrase_answer(result)
+    assert phrased["answer"] == "The emergency room copay is $100; waived if admitted."
+    assert phrased["debug"]["gemini_status"] == "failed_evidence_check"
 
 
 def test_api_error_falls_back(gemini_reply):

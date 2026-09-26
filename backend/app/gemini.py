@@ -21,7 +21,10 @@ INSTRUCTIONS = (
     "- Use only information in the supplied JSON. Never add benefit facts, amounts, percentages, plans, "
     "or advice about which plan to choose.\n"
     "- For status `answered`, state every value from `facts` exactly as written, name its plan, and keep "
-    "any comparison and the provisional-document caveat.\n"
+    "any comparison.\n"
+    "- If required_quotes is present, reproduce every supplied quote verbatim, with its plan and service label. "
+    "You may format the quotes as a list; the four-sentence limit does not apply to quoted source text. "
+    "Do not paraphrase percentages, column headings, limits, exclusions, or notes inside these quotes.\n"
     "- For status `clarification_needed`, ask the user for the missing detail described in the draft.\n"
     "- For status `insufficient_evidence`, say the answer can't be established from the available "
     "documents and give the draft's reason. Do not guess a value.\n"
@@ -40,7 +43,8 @@ def _evidence(result: dict[str, Any], facts: dict[str, Any] | None) -> dict[str,
         "matched_plans": result.get("matched_plans", []),
     }
     if facts:
-        evidence.update({key: facts[key] for key in ("category", "comparison", "facts", "caveat") if facts.get(key)})
+        evidence.update({key: facts[key] for key in ("category", "comparison", "facts", "caveat", "required_terms", "required_quotes")
+                         if facts.get(key)})
     return evidence
 
 
@@ -55,17 +59,35 @@ def _check(answer: str, evidence: dict[str, Any]) -> bool:
         for fact in evidence.get("facts", []):
             if not _numbers(str(fact.get("value") or fact.get("wording") or "")) <= stated:
                 return False
+        if any(term not in answer.lower() for term in evidence.get("required_terms", [])):
+            return False
+        normalized = " ".join(answer.split())
+        if any(" ".join(quote.split()) not in normalized for quote in evidence.get("required_quotes", [])):
+            return False
     return True
 
 
+def skip_reason(result: dict[str, Any], facts: dict[str, Any] | None) -> str | None:
+    """Rules that skip the LLM when the deterministic reply is already final."""
+    if result["status"] != "answered":
+        return "skipped_no_answer"
+    if not facts or facts.get("kind") == "numeric":
+        return "skipped_structured_answer"
+    return None
+
+
 def phrase_answer(result: dict[str, Any]) -> dict[str, Any]:
-    """Have Gemini write the reply; the server keeps status, citations, and the evidence check."""
+    """Have Gemini write retrieved-source answers; the server keeps status, citations, and the evidence check."""
     facts = result.pop("_gemini_facts", None)
     if os.getenv("GEMINI_ENABLED", "false").lower() != "true":
         return result
 
     debug = result["debug"]
     debug["phrasing"] = "deterministic"
+    skipped = skip_reason(result, facts)
+    if skipped:
+        debug["gemini_status"] = skipped
+        return result
     key = os.getenv("GEMINI_API_KEY", "").strip()
     if not key:
         debug["gemini_status"] = "unconfigured"

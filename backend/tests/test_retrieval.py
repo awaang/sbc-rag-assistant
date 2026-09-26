@@ -250,7 +250,8 @@ def test_bm25_only_evaluation_skips_semantic_model_and_records_snapshot(monkeypa
 
 @pytest.mark.parametrize("method,expected_methods", [
     ("semantic", {"semantic"}),
-    ("all", {"bm25", "semantic"}),
+    ("hybrid", {"hybrid"}),
+    ("all", {"bm25", "semantic", "hybrid"}),
 ])
 def test_semantic_and_all_evaluation_run_expected_configurations(
         monkeypatch, tmp_path, method, expected_methods):
@@ -378,3 +379,19 @@ def test_semantic_model_initialization_failure_returns_service_unavailable(monke
 
     assert error.value.status_code == 503
     assert "model unavailable" in error.value.detail
+
+
+def test_hybrid_fuses_bm25_and_semantic_ranks_with_reciprocal_rank_fusion(monkeypatch):
+    def fake_retrieve(_connection, _question, method, _strategy, top_k, *_args):
+        assert top_k == retrieval.HYBRID_CANDIDATES
+        order = {"bm25": [1, 2, 3], "semantic": [3, 1, 4]}[method]
+        return {"results": [{"chunk_id": chunk_id, "rank": rank, "score": 0.0}
+                            for rank, chunk_id in enumerate(order, 1)],
+                "timings": {"search_ms": 1.0}}
+
+    monkeypatch.setattr(retrieval, "retrieve", fake_retrieve)
+    result = retrieval._hybrid(None, "question", "section_aware", 3, 1, None, None, None, False)
+
+    assert [row["chunk_id"] for row in result["results"]] == [1, 3, 2]
+    assert result["results"][0]["score"] == pytest.approx(1 / 61 + 1 / 62)
+    assert result["timings"]["search_ms"] == 2.0

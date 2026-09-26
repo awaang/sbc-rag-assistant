@@ -12,6 +12,8 @@ from typing import Any
 
 MODEL_NAME = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 MODEL_VERSION = os.getenv("EMBEDDING_MODEL_VERSION", "all-MiniLM-L6-v2")
+HYBRID_CANDIDATES = 20
+RRF_K = 60
 
 
 def tokenize(text: str) -> list[str]:
@@ -90,7 +92,10 @@ def approved_chunks(connection, strategy: str, strategy_version: int = 1, plan_i
 
 def retrieve(connection, question: str, method: str, strategy: str, top_k: int = 5,
              strategy_version: int = 1, plan_id: int | None = None, document_id: int | None = None,
-             section: str | None = None) -> dict[str, Any]:
+             section: str | None = None, include_source_context: bool = False) -> dict[str, Any]:
+    if method == "hybrid":
+        return _hybrid(connection, question, strategy, top_k, strategy_version, plan_id,
+                       document_id, section, include_source_context)
     start = time.perf_counter()
     chunks = approved_chunks(connection, strategy, strategy_version, plan_id, document_id, section)
     corpus_load_ms = (time.perf_counter() - start) * 1000
@@ -180,18 +185,49 @@ def retrieve(connection, question: str, method: str, strategy: str, top_k: int =
                   for score, pos in zip(distances[0], positions[0]) if pos >= 0]
         search_ms = (time.perf_counter() - search_started) * 1000
     else:
-        raise ValueError("method must be bm25 or semantic")
+        raise ValueError("method must be bm25, semantic, or hybrid")
     results = []
     for rank, (index, score) in enumerate(ranked, 1):
         chunk = chunks[index]
         results.append({**chunk, "rank": rank, "score": score})
     total = (time.perf_counter() - start) * 1000
-    return {"results": results, "latency_ms": total, "timings": {
+    return {"results": results, **({"source_chunks": chunks} if include_source_context else {}),
+            "latency_ms": total, "timings": {
         "corpus_load_ms": corpus_load_ms,
         "embedding_load_ms": 0.0 if method == "bm25" else embedding_load_ms,
         "index_build_ms": index_build_ms,
         "query_embedding_ms": query_embedding_ms, "model_load_ms": model_load_ms,
         "search_ms": search_ms, "total_request_ms": total}}
+
+
+def _hybrid(connection, question: str, strategy: str, top_k: int, strategy_version: int,
+            plan_id: int | None, document_id: int | None, section: str | None,
+            include_source_context: bool) -> dict[str, Any]:
+    """Reciprocal rank fusion of the BM25 and semantic top candidates: sum of 1 / (RRF_K + rank)."""
+    start = time.perf_counter()
+    depth = max(HYBRID_CANDIDATES, top_k)
+    runs = [retrieve(connection, question, method, strategy, depth, strategy_version, plan_id,
+                     document_id, section, include_source_context and method == "bm25")
+            for method in ("bm25", "semantic")]
+    timings = {name: sum(run["timings"].get(name, 0.0) for run in runs)
+               for name in ("corpus_load_ms", "embedding_load_ms", "index_build_ms",
+                            "query_embedding_ms", "model_load_ms", "search_ms")}
+    fused: dict[int, float] = {}
+    rows: dict[int, dict[str, Any]] = {}
+    for run in runs:
+        for row in run["results"]:
+            fused[row["chunk_id"]] = fused.get(row["chunk_id"], 0.0) + 1 / (RRF_K + row["rank"])
+            rows.setdefault(row["chunk_id"], row)
+    order = sorted(fused, key=lambda chunk_id: (-fused[chunk_id], chunk_id))[:top_k]
+    results = [{**rows[chunk_id], "rank": rank, "score": fused[chunk_id]}
+               for rank, chunk_id in enumerate(order, 1)]
+    total = (time.perf_counter() - start) * 1000
+    response = {"results": results, "latency_ms": total, "timings": {**timings, "total_request_ms": total}}
+    if runs[1].get("index_status"):
+        response["index_status"] = runs[1]["index_status"]
+    if include_source_context:
+        response["source_chunks"] = runs[0].get("source_chunks", [])
+    return response
 
 
 class EmbeddingDataError(RuntimeError):
