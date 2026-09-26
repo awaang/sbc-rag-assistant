@@ -2,7 +2,7 @@
 
 An authenticated demo that answers questions about health benefit plans with cited, evidence-backed answers, and abstains when the evidence is missing, ambiguous, or conflicting.
 
-Admins upload plan PDFs, which the API automatically parses (preserving table rows), chunks, embeds locally, and uses to extract structured benefit values. Chat answers come from BM25 or FAISS semantic retrieval plus the extracted benefits, formatted deterministically with plan, section, and page citations. Optional Gemini phrasing is disabled by default and cannot change facts or citations. Chat transcripts live only in browser memory.
+Admins upload plan PDFs, which the API automatically parses (preserving table rows), chunks, embeds locally, and uses to extract structured benefit values. Chat answers come from BM25 or FAISS semantic retrieval plus the extracted benefits, formatted deterministically with plan, section, and page citations. Gemini then writes the reply from the server's checked evidence; the server keeps the answer status and citations, and returns the deterministic answer if the Gemini API fails or its reply adds or drops a benefit value. Chat transcripts live only in browser memory.
 
 The six PDFs in `data/source-documents/received/` are a provisional development corpus. Their SBC status and public availability are unverified, so treat all results as provisional and scoped to these files.
 
@@ -17,6 +17,7 @@ The six PDFs in `data/source-documents/received/` are a provisional development 
 - Node.js 20+ and npm
 - A Firebase project with Email/Password sign-in enabled, a registered web app, and a service-account JSON file stored outside this repository
 - A Neon Postgres database
+- A Gemini API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
 
 ## Setup and running
 
@@ -28,6 +29,7 @@ The six PDFs in `data/source-documents/received/` are a provisional development 
    - `FIREBASE_PROJECT_ID`
    - `GOOGLE_APPLICATION_CREDENTIALS`: path to the service-account JSON
    - `FRONTEND_ORIGIN=http://localhost:5173`
+   - `GEMINI_ENABLED=true` and `GEMINI_API_KEY`: keep the key in this API `.env` only, never in a `VITE_*` variable
 3. In Firebase Console, make sure `localhost` is an authorized domain.
 
 ### 2. Run the API
@@ -76,16 +78,6 @@ cd backend
 python -m pytest
 ```
 
-### Optional: Gemini phrasing
-
-Add these to the root `.env` and restart the API. Keep the key on the API only, never in a `VITE_*` variable.
-
-```dotenv
-GEMINI_ENABLED=true
-GEMINI_API_KEY=your-key-here
-GEMINI_MODEL=gemini-3.1-flash-lite
-```
-
 ### Maintenance commands
 
 Run these from `backend/`:
@@ -99,7 +91,7 @@ python -m app.pipeline --reprocess-id DOCUMENT_ID  # rebuild one document's deri
 
 `render.yaml` defines the API web service and the static frontend.
 
-1. Connect the repository as a Render Blueprint and fill in the prompted Firebase, Neon, and frontend values.
+1. Connect the repository as a Render Blueprint and fill in the prompted Firebase, Neon, Gemini API key, and frontend values.
 2. Upload the service-account JSON as the Secret File `firebase-service-account.json`.
 3. Once both services exist, set `VITE_API_BASE_URL` on the static site to the API URL and `FRONTEND_ORIGIN` on the API to the static site URL, then redeploy both.
 
@@ -117,7 +109,7 @@ Render Free provides 512 MiB of memory, which local profiling of automatic proce
 │   │   ├── embed.py           # Local sentence-transformer embeddings
 │   │   ├── retrieval.py       # BM25 and FAISS search
 │   │   ├── answering.py       # Evidence gate, citations, deterministic answers
-│   │   ├── gemini.py          # Optional Gemini phrasing
+│   │   ├── gemini.py          # Gemini-written replies
 │   │   ├── pipeline.py        # Full processing pipeline (maintenance CLI)
 │   │   ├── auto_ingestion.py  # Background processing queue for uploads
 │   │   ├── ingest.py          # Parse-only maintenance CLI

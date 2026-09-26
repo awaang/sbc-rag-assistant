@@ -1,9 +1,10 @@
-"""Optional Gemini selection of safe phrasing templates for checked evidence."""
+"""Gemini-written responses over server-checked evidence."""
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from typing import Any
 
@@ -11,24 +12,56 @@ import httpx
 
 
 MODEL = "gemini-3.1-flash-lite"
-TEMPLATES = {
-    "numeric": {
-        "benefit_sentence": lambda category, row: f"The {category} for {row['plan']} is listed as {row['value']}.",
-        "document_sentence": lambda category, row: f"For {row['plan']}, the cited document lists the {category} as {row['value']}.",
-    },
-    "coverage": {
-        "source_says": lambda _category, row: f"{row['plan']}: “{row['wording']}”.",
-        "document_says": lambda _category, row: f"The cited document for {row['plan']} says: “{row['wording']}”.",
-        "plan_wording": lambda _category, row: f"For {row['plan']}, the source wording is: “{row['wording']}”.",
-    },
-}
+NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
+INSTRUCTIONS = (
+    "You write the reply for a health-benefits assistant. The server has already checked the evidence "
+    "and decided the reply type in `status`. Rewrite `draft_answer` as a clear, friendly reply of at most "
+    "four sentences.\n"
+    "Rules:\n"
+    "- Use only information in the supplied JSON. Never add benefit facts, amounts, percentages, plans, "
+    "or advice about which plan to choose.\n"
+    "- For status `answered`, state every value from `facts` exactly as written, name its plan, and keep "
+    "any comparison and the provisional-document caveat.\n"
+    "- For status `clarification_needed`, ask the user for the missing detail described in the draft.\n"
+    "- For status `insufficient_evidence`, say the answer can't be established from the available "
+    "documents and give the draft's reason. Do not guess a value.\n"
+    "- Do not include citations, page numbers, markdown, or numbered lists; the app shows citations separately."
+)
+
+
+def _numbers(text: str) -> set[str]:
+    return {match.replace(",", "") for match in NUMBER.findall(text)}
+
+
+def _evidence(result: dict[str, Any], facts: dict[str, Any] | None) -> dict[str, Any]:
+    evidence: dict[str, Any] = {
+        "status": result["status"],
+        "draft_answer": result["answer"],
+        "matched_plans": result.get("matched_plans", []),
+    }
+    if facts:
+        evidence.update({key: facts[key] for key in ("category", "comparison", "facts", "caveat") if facts.get(key)})
+    return evidence
+
+
+def _check(answer: str, evidence: dict[str, Any]) -> bool:
+    """Reject replies with numbers absent from the evidence or missing a checked value."""
+    if not answer:
+        return False
+    if not _numbers(answer) <= _numbers(json.dumps(evidence, ensure_ascii=False)):
+        return False
+    if evidence["status"] == "answered":
+        stated = _numbers(answer)
+        for fact in evidence.get("facts", []):
+            if not _numbers(str(fact.get("value") or fact.get("wording") or "")) <= stated:
+                return False
+    return True
 
 
 def phrase_answer(result: dict[str, Any]) -> dict[str, Any]:
-    """Let Gemini select a style; the server fills every factual placeholder."""
+    """Have Gemini write the reply; the server keeps status, citations, and the evidence check."""
     facts = result.pop("_gemini_facts", None)
-    if (result["status"] != "answered" or not facts
-            or os.getenv("GEMINI_ENABLED", "false").lower() != "true"):
+    if os.getenv("GEMINI_ENABLED", "false").lower() != "true":
         return result
 
     debug = result["debug"]
@@ -43,31 +76,24 @@ def phrase_answer(result: dict[str, Any]) -> dict[str, Any]:
         debug["gemini_status"] = "invalid_model"
         return result
 
+    evidence = _evidence(result, facts)
     started = time.perf_counter()
     try:
-        templates = TEMPLATES.get(facts.get("kind"))
-        if not templates:
-            debug["gemini_status"] = "unsupported_answer_type"
-            return result
-        # Gemini picks only a template ID. Server-owned strings fill all factual slots.
         payload = {
-            "contents": [{"role": "user", "parts": [{"text": (
-                "Choose the clearest phrasing template for this already-supported answer. "
-                "Return only a template ID from the supplied list. Do not generate or edit facts. "
-                f"Template IDs: {', '.join(templates)}. "
-                f"Supported answer: {result['answer']}"
-            )}]}],
+            "systemInstruction": {"parts": [{"text": INSTRUCTIONS}]},
+            "contents": [{"role": "user", "parts": [{"text": json.dumps(evidence, ensure_ascii=False)}]}],
             "generationConfig": {
+                "temperature": 0.2,
                 "responseMimeType": "application/json",
                 "responseSchema": {
                     "type": "OBJECT",
-                    "properties": {"template_id": {"type": "STRING", "enum": list(templates)}},
-                    "required": ["template_id"],
+                    "properties": {"answer": {"type": "STRING"}},
+                    "required": ["answer"],
                 },
-                "maxOutputTokens": 512,
+                "maxOutputTokens": 1024,
             },
         }
-        with httpx.Client(timeout=8.0) as client:
+        with httpx.Client(timeout=10.0) as client:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
             for attempt in range(3):
                 response = client.post(url, headers={"x-goog-api-key": key}, json=payload)
@@ -78,22 +104,20 @@ def phrase_answer(result: dict[str, Any]) -> dict[str, Any]:
             response.raise_for_status()
         body = response.json()
         usage = body.get("usageMetadata") or {}
+        debug["gemini_model"] = model
         debug["gemini_tokens"] = {
             "input": usage.get("promptTokenCount", 0),
             "output": usage.get("candidatesTokenCount", 0),
             "total": usage.get("totalTokenCount", 0),
         }
         parts = body["candidates"][0]["content"]["parts"]
-        template_id = json.loads("".join(part.get("text", "") for part in parts))["template_id"]
-        if template_id not in templates:
-            debug["gemini_status"] = "invalid_output"
+        answer = str(json.loads("".join(part.get("text", "") for part in parts))["answer"]).strip()
+        if not _check(answer, evidence):
+            debug["gemini_status"] = "failed_evidence_check"
             return result
-        category = facts.get("category", "")
-        sentences = [templates[template_id](category, row) for row in facts["facts"]]
-        answer_parts = [facts.get("comparison", ""), " ".join(sentences), facts["caveat"]]
-        result["answer"] = " ".join(part for part in answer_parts if part)
+        result["answer"] = answer
         debug["phrasing"] = "gemini"
-        debug["gemini_model"] = model
+        debug["gemini_status"] = "ok"
     except httpx.HTTPStatusError as exc:
         debug["gemini_status"] = "http_error"
         debug["gemini_http_status"] = exc.response.status_code
@@ -102,7 +126,7 @@ def phrase_answer(result: dict[str, Any]) -> dict[str, Any]:
     except httpx.HTTPError:
         debug["gemini_status"] = "network_error"
     except (AttributeError, KeyError, IndexError, TypeError, ValueError):
-        debug["gemini_status"] = "unavailable"
+        debug["gemini_status"] = "invalid_response"
     finally:
         debug["gemini_latency_ms"] = round((time.perf_counter() - started) * 1000, 1)
         debug["latency_ms"] = round(debug["latency_ms"] + debug["gemini_latency_ms"], 1)

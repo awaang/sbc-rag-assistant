@@ -17,7 +17,7 @@ services:
       - key: FRONTEND_ORIGIN
         sync: false
       - key: GEMINI_ENABLED
-        value: "false"
+        value: "true"
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_MODEL
