@@ -16,7 +16,7 @@ The FastAPI service now triggers the same parsing, chunking, candidate extractio
 - **Keyword retrieval:** `rank-bm25` over the same canonical chunks, independently measurable from semantic search.
 - **PDF handling:** `pdfplumber` first; evaluate actual SBC output and add Camelot only for tables where it demonstrably improves row/cell structure.
 - **Answers, deterministic path:** Deterministic formatting for structured numeric lookups and comparisons, citations, clarification, and abstention. This path decides every answer and is the fallback response when Gemini is unconfigured, unavailable, or returns invalid output.
-- **Answers, Gemini responses (required, Phase 7):** Gemini writes every reply after the deterministic answer path, enabled in the demo configuration. It receives the reply type, deterministic draft, and checked facts; the backend keeps status and citations and rejects replies with numbers absent from the evidence or missing a checked value. Measured quality, latency, and token use remain pending the corpus evaluation.
+- **Answers, Gemini responses (required, Phase 7):** Gemini writes only answers built from retrieved source rows. A rules-based check skips it for structured-benefit answers, clarifications, and insufficient-evidence replies, which return the deterministic text. The backend keeps status and citations and rejects replies with numbers absent from the evidence or missing a checked value.
 - **Deployment:** Render Free static site + web service; Neon and Firebase are external managed services. Expect API sleep/cold starts and ephemeral Render filesystems. Store durable state in Neon. Do not require a custom domain or paid persistent disk.
 - **Uploaded source files:** Store modest PDFs as PostgreSQL binary data in Neon for the initial six-plan demo to avoid another account/service and keep uploads durable. Impose a documented upload-size limit below provider/request limits. If corpus size outgrows database storage, revisit object storage only after verifying a no-card option.
 - **Ingestion execution:** An admin upload or Retry queues a document in Neon and schedules the full pipeline after the FastAPI response. A database advisory lock serializes processing; startup and admin document refresh resume interrupted work. Two interrupted attempts stop automatic retries and require admin Retry. Render sets the configurable embedding batch size to 1 to reduce peak memory. `python -m app.pipeline`, `app.ingest`, and `app.embed` remain maintenance commands. Parsed provenance, stage outcomes, warnings, and embeddings are stored in Neon. No uploaded file or generated index depends on Render's ephemeral filesystem.
@@ -72,7 +72,9 @@ The FastAPI service now triggers the same parsing, chunking, candidate extractio
 - [x] Add admin-only API operations and a benefit review UI to extract, inspect, correct, and assign review status, with reviewer UID and timestamp.
 - [x] Add an idempotency index for repeated extraction of the same source line.
 - [x] Gate answers on queryable documents and unambiguous values with page and section citations; admin verification remains optional. End-to-end corpus evaluation remains open.
-- [ ] Measure extraction accuracy against manually verified labels for the provisional corpus, reporting it as corpus-scoped; repeat on any later qualifying SBC corpus.
+- [x] Measure extraction accuracy against `evaluation/extraction_labels.json` with `python -m app.evaluate`: 31/33 fields (2026-09-25), up from 26/33.
+- [x] Extraction fixes from that audit (2026-09-25): "No annual deductible" is a none value; "Emergency services" rows are ER cost sharing; flat "per visit" primary care and specialist amounts are copays; out-of-network reimbursement schedules ("Amount over", "up to") are not copays; tables continued on the next page keep the previous page's network headers and open section.
+- [x] Answer fixes from the same audit: "yearly"/"annually" are period words like "year"/"annual" in the source gate; a question naming a year that doesn't match the plan's recorded plan year (or has none) abstains.
 
 **Milestone:** Automatic extraction and optional admin review are implemented. Measured accuracy must identify the provisional corpus.
 
@@ -112,6 +114,155 @@ The FastAPI service now triggers the same parsing, chunking, candidate extractio
 
 ### Phase 6 — Deployment, evaluation, and documentation
 
+**Answer accuracy regression tests (2026-09-25):** Added a focused offline suite checking
+final deterministic/fallback text, exact benefit amounts and source citations, competing
+network/family contexts, plan-value associations, comparison winners, and abstention.
+Real provisional Kaiser PDF cases share the existing parsing/extraction fixture; competing
+benefit contexts use synthetic records. Initial results were 15 passed and 3 strict
+expected failures. The compound source-bundle repair below resolves those answer
+gaps without changing the structured candidate records. The 25-question manifest
+contains labels; the admin runner still scores retrieval only. Gemini quality and
+all four retrieval configurations remain unmeasured.
+
+**Kaiser hospitalization X-ray answer (2026-09-25):** The evidence gate matched every
+question term only against row text. It therefore missed “hospitalization” in the section
+heading and treated PDF “X-rays” as different from query “xray”, despite retrieving the
+relevant chunk. Source matching now includes the detected section heading and normalizes
+these written forms; the answer still quotes the source row, “$500 per admission,” and
+cites page 1, Hospitalization Services. A real-PDF regression covers this question.
+
+**Provisional PDF answer checks (2026-09-25):** Added 25 answer, 25 citation, and 25
+missing-evidence abstention checks using all six received PDFs, parsed benefits and
+section-aware chunks, and real BM25 search in an in-memory corpus. Initially all
+25 full-answer checks had strict expected failures, while six citation checks
+passed and 19 had strict expected failures. The newer audit below records the
+current results. All 25 missing-evidence abstention checks pass. These are
+offline corpus-scoped regressions, not a live API/Gemini run or
+results for the other retrieval configurations; measured deployment quality remains
+open.
+
+**Kaiser mail-order refill answer (2026-09-25):** Removed the arbitrary four-term
+limit that forced specific natural-language coverage questions into clarification
+before retrieval. The original coverage gate still requires the question terms in
+one cited source row/section; compound questions now use the bundle path described
+below. The real PDF regression returns the listed “Most generic
+refills through our mail-order service” cost of $20 for up to a 100-day supply,
+with page 1 and the Prescription Drug Coverage section. The broader question
+matching also made one Aetna POS Payment Limit citation check pass; the initial
+corpus citation baseline was 6/25, with 19 strict expected failures.
+
+The next brand-name mail-order turn exposed a separate follow-up issue: the answer
+path appended the previous generic-refill question to the current specific question,
+so no single source row could pass the evidence gate. Numeric category inheritance
+now applies only to explicit elliptical follow-ups or comparisons, without appending
+the previous question. A real-PDF regression checks the brand-name row's $40 cost
+for up to a 100-day supply and its page 1 Prescription Drug Coverage citation.
+
+**Six-document line and answer audit (2026-09-25):** Reparsed all 22 pages and
+checked all 983 extracted text lines against both chunk strategies. Source-line
+provenance now retains table-positioned lines when table extraction drops words;
+the repeatable check finds zero lost extracted words at page level. This does not
+establish complete fact interpretation. Group Health table rows without detected
+headings can now cite their service label, and specific copay questions exclude
+unrelated ambiguous services. Plan aliases distinguish Guardian's dental and
+vision products. Explicit multi-context numeric questions can report all cited
+structured values; the Aetna HMO deductible/maximum and Aetna POS network/scope
+deductible questions now pass their full-answer checks. Current offline results:
+Before the compound source-bundle path, results were 4/25 full answers, 10/25
+citations, and 25/25 missing-source abstentions. Gemini
+quality and deployed behavior remain unmeasured.
+
+**TBD — comprehensive answer coverage:** The request to cover every piece of
+information and achieve 100% accuracy for arbitrary questions exceeds the
+current four-category structured schema and 25-question evaluation. There is
+no finite test of every possible natural-language question. Expand the labeled
+set by source row, table context, notes, exclusions, and cross-plan combinations;
+continue expanding beyond the now-passing 25-question set before claiming broad
+accuracy. Reprocessing existing documents to use revised provenance replaces
+their benefit records, including optional admin corrections or verification, so
+review stored records before a maintenance reprocess.
+
+**Compound source-bundle repair (2026-09-25):** BM25 now ranks candidate chunks,
+then the deterministic gate can select multiple source rows and adjoining notes
+for a compound question. It keeps table network/family headers, requires each
+requested source label, and returns separate citations where facts span sections
+or pages. Simple structured lookups and the independent semantic playground
+remain. A POS infertility-treatment query now reports that the summary states
+no single price and qualifies cost sharing by service and location, citing page 4.
+All 25 labeled full answers, 25 citations, and 25 missing-source abstentions now
+pass against freshly parsed PDFs. The same 25 deterministic answer/citation checks
+passed in a read-only run against the configured Neon documents. The complete
+backend suite passes (199 passed, 1 skipped); the frontend build passes. Live
+Gemini quality, all four retrieval configurations, arbitrary questions, and
+the deployed service remain unmeasured.
+
+**Deductible query regression (2026-09-25):** A live `what is deductable`
+question returned no BM25 ranks although the Aetna POS PDF and approved Neon
+document contain the deductible table. Normalize that spelling at the answer
+boundary. A bare deductible question now selects the cited deductible row and
+its adjacent family row, preserving both network headers. The exact question
+passes against freshly parsed PDFs and a read-only query of the configured
+approved Neon document. This identifies a query interpretation/retrieval gap;
+the parser retained the needed values. Other unlabeled questions still require
+separate evaluation before broad accuracy claims.
+
+**Kaiser inpatient label regression (2026-09-25):** The compound gate previously
+required an `Inpatient Coverage` row, which exists in the Aetna summaries but
+not the Kaiser Traditional summary. Its hospital cost appears under
+`Hospitalization Services You Pay` in the `Room and board` row. The gate now
+accepts either source label for an inpatient hospital question. A PDF-based
+regression and a read-only query of the approved Neon document both return
+`$500 per admission` with a page 1 hospitalization citation. The exact live
+question text is pending from the user; this regression covers the triggering
+inpatient/hospital label path.
+More specific inpatient psychiatric and detoxification questions retain their
+own source labels, and deductible-specific questions do not use the generic
+hospital cost row.
+
+**Corpus-wide source catalog and selector sweep (2026-09-25):** Replaced the
+single-row coverage gate with a provenance-backed source catalog for general
+coverage questions. It retains table headers, joins continuation rows and nearby
+qualifications, and allows a request to resolve to multiple cited passages. A
+full selector sweep now reaches all 283 extracted benefit entries across the six
+received PDFs and all 43 exclusion passages are reachable with explicit
+exclusion intent; the separate line-retention check still covers all 983
+extracted lines across 22 pages. The labeled evaluation remains 25 questions,
+and selector sweeps do not establish accuracy for every possible phrasing or
+validate every extraction. Backend tests: 201 passed, 1 skipped. Frontend
+production build passes. The configured Neon 25-question checks were performed
+read-only in an earlier run; the latest source-catalog changes were verified
+against the offline parsed-PDF corpus, not re-run against Neon or deployed Gemini.
+Universal 100% answer accuracy remains unprovable; increase and manually verify
+the evaluation set before making broader claims.
+
+**Evaluation manifest v3 (2026-09-25):** Rebalanced `evaluation/questions.json` to
+30 questions: 18 single-plan answers, 3 cross-plan comparisons, 5 expected
+abstentions, and 4 expected clarifications. Each question records
+`expected_status`, `required_phrases`, and coverage `tags`, and may record
+`forbidden_amounts`. Additions cover plain-language and synonym wording, later-page
+evidence, not-covered values, a false premise, a missing network column, an absent
+deductible or premium, partial support, a wrong plan year, missing, ambiguous, or
+unknown plans, and mixed coverage types. Admin retrieval scoring uses only the 21
+answerable questions. Deterministic results: 17/21 answerable questions and 8/9
+abstention/clarification questions pass; five `known_gap` questions are strict
+expected failures pending fixes. Backend tests: 189 passed, 9 xfailed, 1 skipped.
+Expected answers for new questions were checked against parsed PDF text and still
+need manual page-level verification; Neon and Gemini runs of v3 are pending.
+
+**Hybrid retrieval and offline evaluation report (2026-09-25):** Added hybrid
+retrieval (BM25 and semantic top 20, reciprocal rank fusion with k = 60) to the
+retrieval module, admin playground, and evaluation runner; migration `009` allows
+`hybrid` evaluation runs. Added `python -m app.evaluate`, which measures all six
+retrieval configurations, deterministic answer/citation/abstention accuracy,
+extraction accuracy against `evaluation/extraction_labels.json` (33 fields), and
+optional Gemini tokens and latency. First results: retrieval hit rate 71–90%;
+deterministic answers 25/30 in every configuration; 21/21 removed-evidence
+abstentions; extraction 26/33 fields; Gemini about 600 tokens per query, 4.2 s mean
+latency, and 4 of 30 calls timed out at 10 s. Ordinary chat stays on BM25 with
+section-aware chunks. Whether to skip Gemini for structured answers or shorten its
+timeout to meet the 2 s latency target is **TBD** pending user decision; migration
+`009` still needs to be applied to Neon.
+
 - [ ] Deploy React static site and FastAPI web service on Render Free; configure Firebase authorized domains and server secrets; connect Neon Free.
 - [ ] Verify upload-to-automatic-pipeline-to-answer against Neon and on the deployed Render service; measure peak memory, CPU time, and cold-start behavior. Render Free compatibility is **TBD** because the current local embedding path exceeded 512 MiB even at batch size 1.
 - [ ] Run the labeled set against the provisional corpus; report answer/extraction accuracy, per-method retrieval results by question type, latency, and Gemini token usage, clearly scoped to those documents.
@@ -123,12 +274,16 @@ The FastAPI service now triggers the same parsing, chunking, candidate extractio
 
 Gemini phrasing was changed from an optional phase to a required phase on 2026-09-25 at the user's request. The same day, the user asked for Gemini to write all replies instead of selecting fixed templates, falling back on API errors and on replies that fail a numeric evidence check. The evidence gate is unchanged.
 
+Later that day, the user asked to follow the original project spec over that decision: keep the LLM step thin and add a rules-based check that skips Gemini when structured data already answers the question. Gemini now writes only retrieved-source answers. The user also asked to treat the six PDFs as verified SBCs.
+
 - [x] Add a Gemini adapter after the deterministic answer path, controlled by `GEMINI_ENABLED`.
-- [x] Have Gemini write supported-answer, clarification, and insufficient-evidence replies from the reply type, deterministic draft, and checked facts. The server keeps status and citations. Record per-response token use and latency.
+- [x] Skip Gemini by rule for structured-benefit answers, clarifications, and insufficient-evidence replies (`skip_reason`).
+- [x] Have Gemini write retrieved-source answers from the reply type, deterministic draft, and checked facts. The server keeps status and citations. Record per-response token use and latency.
 - [x] Return the deterministic answer when Gemini is unconfigured, the API call fails, or the reply contains a number absent from the evidence or omits a checked value.
 - [x] Enable Gemini locally with a configured API key.
 - [ ] Enable Gemini on the deployed Render API service with `GEMINI_API_KEY` set as a service secret.
-- [ ] Compare quality, latency, and token use with deterministic output on the labeled provisional corpus after evaluation data is available.
+- [x] Compare quality, latency, and token use with deterministic output (`python -m app.evaluate --gemini`): 17 of 30 queries call Gemini, served accuracy equals deterministic (83%), mean / p95 latency 757 / 1,668 ms, 408 tokens per query.
+- [x] Show the offline report (accuracy, latency, tokens per query) on the admin Evaluation page via `GET /api/admin/evaluation/report`.
 
 **Milestone:** Gemini-written replies are served in the demo, with measured quality, latency, and token use reported alongside the deterministic baseline.
 

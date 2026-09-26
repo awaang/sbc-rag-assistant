@@ -4,7 +4,7 @@ These repository files record current requirements and selected technology decis
 
 ## Project purpose
 
-Build a demo that answers questions about health benefit plans using the six PDFs currently received as a provisional development corpus. Their SBC status and public availability remain unverified; do not describe them as verified SBCs. Answer correctness, traceable citations, and abstaining when evidence is insufficient are core requirements. Authentication is in scope.
+Build a demo that answers questions about health benefit plans using the six received PDFs, which are treated as verified SBCs (four medical plans, one dental plan, one vision plan). Answer correctness, traceable citations, and abstaining when evidence is insufficient are core requirements. Authentication is in scope.
 
 ## Read before making changes
 
@@ -18,9 +18,9 @@ Build a demo that answers questions about health benefit plans using the six PDF
 
 - Treat `PRD.md` as the canonical, durable statement of the project brief. Before adding or changing behavior, check it and `ARCHITECTURE.md`/`PLAN.md` for alignment.
 - Do not silently omit or replace a project-brief requirement. If a requirement is ambiguous, conflicts with the current design, or appears infeasible, explain the discrepancy to the user and mark it **TBD** in the relevant planning document until resolved.
-- Keep the core constraints visible in implementation: use the six received PDFs as a provisional development corpus while preserving their unverified status; the set includes dental and vision summaries and does not establish HMO/PPO/HDHP SBC coverage; table-preserving parsing/chunking with provenance; BM25 and local sentence-transformer embeddings searched with FAISS; structured benefit extraction; deterministic answer formatting as the decision path and fallback; required Gemini-written replies (Phase 7), enabled in the demo, only after the evidence gate, with reply type, facts, and citations decided by the backend and a numeric evidence check before Gemini text is used; citations and abstention; Firebase authentication with server-enforced admin roles; real admin upload with automatic parsing/extraction/embedding in the FastAPI service, restart recovery, automatic readiness assessment and approval for successful admin uploads, and optional benefit correction/verification; and 20–30-question evaluation. The local pipeline command remains a maintenance path. Treat performance and evaluation as provisional and corpus-scoped; final SBC/public-source qualification remains TBD.
+- Keep the core constraints visible in implementation: use the six received PDFs as the verified SBC corpus; the set includes dental and vision SBCs, so preserve each document's coverage type; table-preserving parsing/chunking with provenance; BM25 and local sentence-transformer embeddings searched with FAISS; structured benefit extraction; deterministic answer formatting as the decision path and fallback; a thin final Gemini step (Phase 7), enabled in the demo, only after the evidence gate and only for retrieved-source answers, with a rules-based skip for structured-benefit answers and non-answers, reply type, facts, and citations decided by the backend, and a numeric evidence check before Gemini text is used; citations and abstention; Firebase authentication with server-enforced admin roles; real admin upload with automatic parsing/extraction/embedding in the FastAPI service, restart recovery, automatic readiness assessment and approval for successful admin uploads, and optional benefit correction/verification; and 20–30-question evaluation. The local pipeline command remains a maintenance path. Treat performance and evaluation as scoped to this corpus.
 - Keep the roles distinct: sentence-transformers generates embeddings locally, FAISS performs local vector search, and Neon Postgres stores durable relational application data. Do not duplicate vectors in pgvector unless a later requirement justifies changing the selected vector index.
-- Do not substitute hosted embeddings or managed file-search RAG. Gemini is required but must remain a final reply-writing step over server-checked evidence with a deterministic fallback; it may never provide unsupported benefit facts.
+- Do not substitute hosted embeddings or managed file-search RAG. Per the original project spec, Gemini must remain a thin final reply-writing step, skipped when structured data already answers the question, over server-checked evidence with a deterministic fallback; it may never provide unsupported benefit facts.
 - Keep live chat transcripts in frontend memory for the active page session only; clear them on new chat, sign-out, reload, or page close. Do not persist ordinary user messages to Neon, browser storage, or the evaluation manifest.
 
 ## Project structure
@@ -37,9 +37,9 @@ The repository contains project documentation and environment configuration at i
 - `backend/migrations/` — ordered PostgreSQL schema migrations; embeddings are ordinary array values, not pgvector.
 - `frontend/` — React + TypeScript + Vite UI, Tailwind styling, and shadcn-style components.
 - `render.yaml` — Render Blueprint for the static frontend and API service; account-specific secrets stay in Render's environment settings.
-- `data/source-documents/received/metadata.json` — provisional metadata for received candidate PDFs; null values are unknown and records do not establish SBC eligibility.
+- `data/source-documents/received/metadata.json` — metadata for the six SBC PDFs; null values are unknown.
 
-Evaluation artifacts have not been established yet. Backend tests currently live in `backend/tests/` and use the pytest configuration in `backend/pytest.ini`. Inspect the current tree before assuming other paths or creating new structures. Keep the layout small and clear; update this section if major directories are introduced.
+Evaluation data lives in `evaluation/`: `questions.json` (labeled questions), `extraction_labels.json` (expected structured values), and `results/` (output of `python -m app.evaluate`). Backend tests currently live in `backend/tests/` and use the pytest configuration in `backend/pytest.ini`. Inspect the current tree before assuming other paths or creating new structures. Keep the layout small and clear; update this section if major directories are introduced.
 
 ## Engineering guidelines
 

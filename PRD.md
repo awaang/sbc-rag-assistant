@@ -18,9 +18,8 @@ Users must authenticate before accessing the question-answering application. Fir
 
 ## Goals
 
-- Use the six PDFs currently supplied in `data/source-documents/received/` as the provisional development corpus for ingestion, retrieval, answer-flow, and evaluation work. They remain unverified documents; do not represent them as verified SBCs or public-source documents.
-- Preserve each supplied file's actual document type and coverage type. The current set includes medical plan/benefit summaries and dental and vision summaries, so results are provisional and apply only to this mixed set.
-- Final qualification as exactly six publicly available standardized medical SBCs, including HMO/PPO/HDHP coverage, is **TBD**. The current six do not satisfy that acceptance criterion unless individually verified or replaced. This does not block development or provisional evaluation on the supplied set.
+- Use the six PDFs currently supplied in `data/source-documents/received/` as the SBC corpus for ingestion, retrieval, answer-flow, and evaluation work. They are treated as verified SBCs (decision recorded 2026-09-25).
+- Preserve each supplied file's actual document type and coverage type. The current set includes medical plan/benefit summaries and dental and vision summaries, so results apply to this mixed set.
 - Answer questions about plan benefits and costs, including single-plan lookups and comparisons across plans.
 - Ground answers in the source documents and cite the source plan and section for every answer.
 - Avoid guessing: report low confidence or insufficient source support instead of returning an unsupported answer.
@@ -32,7 +31,7 @@ Users must authenticate before accessing the question-answering application. Fir
 - Evaluate the system with approximately 20–30 questions with known correct answers, measuring answer accuracy, latency, and Gemini token usage per query. Deterministic fallback answers have no model-token usage to report.
 - Document implementation decisions, chunking tradeoffs, retrieval results, extraction accuracy, and what would change with a real budget.
 - **Deterministic answer path:** use deterministic answer formatting for supported facts, comparisons, citations, clarification, and abstention. This path decides every answer and is the fallback response.
-- **Required Gemini response phase:** Gemini writes the user-facing reply for every response (supported answers, clarification requests, and insufficient-evidence replies) from the server's checked evidence, enabled in the demo configuration. The server decides the reply type, facts, and citations; Gemini must not select facts, fill gaps, alter citations, or override abstention. The deterministic answer is returned when Gemini is unconfigured or the API call fails, or when the reply contains a number absent from the evidence or omits a checked value. Gemini quality, latency, and token usage must be measured on the provisional corpus; results remain **TBD** until the evaluation is run.
+- **Required Gemini response phase (thin, per the original project spec):** Gemini runs only at the very end, after the evidence gate, and only for answers built from retrieved source rows. A rules-based check skips Gemini when the structured benefit data already answers the question and for clarification and insufficient-evidence replies; those return the deterministic text. This overrides the earlier requirement that Gemini write every reply (changed 2026-09-25). The server decides the reply type, facts, and citations; Gemini must not select facts, fill gaps, alter citations, or override abstention. The deterministic answer is returned when Gemini is unconfigured or the API call fails, or when the reply contains a number absent from the evidence, omits a checked value, or drops a checked coverage qualification. Quality, latency, and token usage per query are measured by `python -m app.evaluate --gemini`.
 - Provide actual admin PDF uploads and review controls. Uploads are stored durably and automatically trigger parsing, chunking, benefit extraction, embedding, and readiness assessment in the FastAPI service. Interrupted queued work resumes after a service restart; repeated interruptions stop with a visible failure and an admin Retry action. The local pipeline command remains available for maintenance. Routine queryability does not require document approval or per-benefit confirmation.
 - Target a fully free, no-credit-card local/deployed demo using Firebase Spark, Neon Free, and Render Free, subject to current provider limits and account verification. Free-tier cold starts and quotas are acceptable limitations and must be documented.
 - Show basic evidence-path/citation diagnostics to all users and detailed retrieval, parsing, extraction, and ingestion diagnostics to admins.
@@ -49,7 +48,6 @@ Users must authenticate before accessing the question-answering application. Fir
 
 1. **Document corpus and ingestion**
    - Use the six supplied PDFs as the current provisional development corpus and track their document identity, type, coverage type, and provenance accurately.
-   - Keep SBC status and public availability explicitly unverified unless confirmed from document evidence and an authoritative public source. Filenames alone do not establish eligibility. Final acceptance as exactly six public medical SBC PDFs spanning HMO, PPO, and HDHP remains **TBD**.
    - Parse the provisional source documents with attention to table structure; evaluate PDF parsing approaches such as pdfplumber or Camelot.
    - Preserve benefit rows and their context during chunking; a table row must not be split across chunks.
    - Explore fixed-size and semantic chunking and document the selected strategy and its tradeoffs.
@@ -62,12 +60,13 @@ Users must authenticate before accessing the question-answering application. Fir
    - Provide semantic retrieval using locally generated sentence-transformer embeddings and FAISS vector search, with no embedding API.
    - Compare both methods on the evaluation questions and report which question types each handles better and why.
 - Evaluate all four combinations of the two retrieval methods and two chunking strategies against the same questions.
-  - BM25 and semantic retrieval must be independently measurable. Which method the demo uses at runtime, and whether retrieval fusion is needed, are **TBD** until evaluation results are available.
+  - BM25 and semantic retrieval must be independently measurable. Hybrid reciprocal-rank fusion is implemented and measured as a third method. Ordinary chat uses BM25 with section-aware chunks; changing the runtime method remains **TBD** pending a user decision on the measured results.
 
 3. **Structured benefit extraction**
    - Extract key numerical benefit details from the provisional source documents into a clean schema organized by plan. The initial fields are deductible, emergency room cost sharing, copays, and out-of-pocket maximum; additional coverage is **TBD**.
    - Store each extracted value with its plan identity and source document, page, and section when available.
    - Use structured extracted data for numerical questions such as deductibles, copays, and out-of-pocket maximums, rather than relying on semantic retrieval alone.
+   - For compound questions whose requested facts span rows, the deterministic answer path may select multiple BM25-retrieved, provenance-bearing source rows and adjacent qualifiers. It must require every requested part, preserve table column context, and abstain when any part lacks traceable support. This source path complements structured extraction; it does not turn semantic similarity into evidence for a numerical value.
    - Allow unambiguous automatically extracted candidates to support numerical answers when value, requested context, page, and detected section are usable. Optional admin correction and explicit verification remain available.
    - Record extraction accuracy against verified values in the evaluation set.
    - Exact schema fields and extraction coverage beyond the example benefit types are **TBD**.
@@ -75,7 +74,7 @@ Users must authenticate before accessing the question-answering application. Fir
 4. **Question answering and citations**
    - Accept natural-language questions about a plan or comparisons across plans.
    - Produce answers from retrieved evidence and structured extracted data using deterministic formatting.
-   - Gemini writes the final reply from the validated result. The evidence gate, facts, citations, and abstention decision remain application-controlled, and the deterministic answer is returned if Gemini fails or its reply fails the evidence check.
+   - Gemini writes the final reply for retrieved-source answers only; a rules-based check skips it for structured-benefit answers and non-answers. The evidence gate, facts, citations, and abstention decision remain application-controlled, and the deterministic answer is returned if Gemini fails or its reply fails the evidence check.
    - Cite the source plan and relevant document section in every answer; include the page when available.
    - When confidence is low or supporting evidence is missing, say that the answer cannot be established from the available documents instead of guessing.
    - The initial abstention rule is evidence-based: do not provide a requested value if the structured record or retrieved source does not support it with a traceable citation. Numeric confidence thresholds are **TBD** pending evaluation.
@@ -113,7 +112,7 @@ Users must authenticate before accessing the question-answering application. Fir
 
 ## Acceptance criteria
 
-- [ ] The provisional workflow uses the six received PDFs without misrepresenting their SBC status, public availability, or medical/dental/vision coverage types.
+- [x] The workflow uses the six received SBC PDFs without misrepresenting their medical/dental/vision coverage types.
 - [ ] Final corpus qualification is resolved: exactly six publicly available standardized medical SBC PDFs, including HMO, PPO, and HDHP plans, or a documented approved change to that target.
 - [ ] Provisional source documents are parsed with table structure considered, and chunks do not split table rows.
 - [ ] BM25 and local semantic retrieval are both implemented and evaluated against approximately 20–30 questions with known answers.
@@ -127,7 +126,7 @@ Users must authenticate before accessing the question-answering application. Fir
 - [ ] For low-confidence or unsupported questions, the tool reports insufficient evidence rather than guessing.
 - [ ] Per-query accuracy, latency, and Gemini token usage are measured.
 - [ ] The deterministic answer flow is complete and evaluated on its own, and serves as the fallback.
-- [ ] Gemini writes replies in the demo, cannot weaken evidence, citation, or abstention behavior, and is compared with deterministic output for quality, latency, and token use. Comparative quality claims remain **TBD** until measured.
+- [ ] Gemini writes retrieved-source replies in the demo (skipped by rule otherwise), cannot weaken evidence, citation, or abstention behavior, and is compared with deterministic output for quality, latency, and token use. Comparative quality claims remain **TBD** until measured.
 - [ ] The README explains chunking decisions, BM25 versus semantic retrieval results, extraction accuracy, and what would be done differently with a real budget.
 - [ ] Unauthenticated requests are rejected by the application server; authenticated users can access the question-answering flow.
 - [ ] Admin uploads are durable and start processing automatically; readiness, warning handling, restart recovery, and Retry work end to end without mandatory approval, and non-admin users cannot invoke admin operations.
