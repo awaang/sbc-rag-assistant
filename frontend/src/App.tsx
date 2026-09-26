@@ -39,6 +39,20 @@ const pageLabels: Record<Page, string> = {
   profile: "Profile",
 };
 
+const pagePaths: Record<Page, string> = {
+  chat: "/",
+  plans: "/plans",
+  benefits: "/benefits",
+  playground: "/playground",
+  evaluation: "/evaluation",
+  profile: "/profile",
+};
+
+function pageFromPath(pathname: string): Page {
+  const path = pathname.replace(/\/+$/, "") || "/";
+  return (Object.keys(pagePaths) as Page[]).find((page) => pagePaths[page] === path) || "chat";
+}
+
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
 function Icon({ name, className = "" }: { name: "spark" | "send" | "shield" | "book" | "profile" | "logout" | "trash"; className?: string }) {
@@ -64,9 +78,24 @@ export default function App() {
   const [chatTurns, setChatTurns] = useState<ChatTurn[]>([]);
   const [loading, setLoading] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [activePage, setActivePage] = useState<Page>("chat");
+  const [roleLoaded, setRoleLoaded] = useState(false);
+  const [activePage, setActivePage] = useState<Page>(() => pageFromPath(window.location.pathname));
   const chatEpoch = useRef(0);
   const chatRequest = useRef<AbortController | null>(null);
+  const signedIn = useRef(false);
+
+  function navigate(next: Page, replace = false) {
+    setActivePage(next);
+    if (window.location.pathname === pagePaths[next]) return;
+    if (replace) window.history.replaceState(null, "", pagePaths[next]);
+    else window.history.pushState(null, "", pagePaths[next]);
+  }
+
+  useEffect(() => {
+    const onPopState = () => setActivePage(pageFromPath(window.location.pathname));
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   useEffect(() => {
     if (!firebaseAuth) return;
@@ -78,13 +107,17 @@ export default function App() {
         chatRequest.current = null;
         setLoading(false);
         setIsAdmin(false);
-        setActivePage("chat");
+        setRoleLoaded(false);
+        if (signedIn.current) navigate("chat", true);
+        signedIn.current = false;
         setChatTurns([]);
         setQuestion("");
         return;
       }
+      signedIn.current = true;
       const token = await getIdTokenResult(nextUser);
       setIsAdmin(token.claims.admin === true);
+      setRoleLoaded(true);
     });
   }, []);
 
@@ -165,6 +198,15 @@ export default function App() {
     if (firebaseAuth) void signOut(firebaseAuth);
   }
 
+  const visiblePages: Page[] = isAdmin
+    ? ["chat", "plans", "benefits", "playground", "evaluation"]
+    : ["chat", "plans"];
+  const pageAllowed = activePage === "profile" || visiblePages.includes(activePage);
+
+  useEffect(() => {
+    if (user && roleLoaded && !pageAllowed) navigate("chat", true);
+  }, [user, roleLoaded, pageAllowed]);
+
   if (!firebaseConfigured) {
     return <SetupScreen />;
   }
@@ -198,18 +240,15 @@ export default function App() {
     );
   }
 
-  const visiblePages: Page[] = isAdmin
-    ? ["chat", "plans", "benefits", "playground", "evaluation"]
-    : ["chat", "plans"];
-  const page = activePage === "profile" || visiblePages.includes(activePage) ? activePage : "chat";
+  const page: Page | null = pageAllowed ? activePage : roleLoaded ? "chat" : null;
 
   return (
       <main className={`page-shell ${page === "chat" ? "chat-shell" : ""}`}>
       <header className="topbar app-topbar">
-        <Brand onClick={() => setActivePage("chat")} />
+        <Brand onClick={() => navigate("chat")} />
         <nav className="page-nav" aria-label="Main navigation">
           {visiblePages.map((item) => (
-            <button key={item} type="button" className={`nav-link ${page === item ? "active" : ""}`} aria-current={page === item ? "page" : undefined} onClick={() => setActivePage(item)}>
+            <button key={item} type="button" className={`nav-link ${page === item ? "active" : ""}`} aria-current={page === item ? "page" : undefined} onClick={() => navigate(item)}>
               {pageLabels[item]}
             </button>
           ))}
@@ -217,7 +256,7 @@ export default function App() {
         <div className="account-actions">
           <span className={`role-badge ${isAdmin ? "admin" : ""}`}>{isAdmin ? "Admin" : "Member"}</span>
           <span className="account-email">{user.email}</span>
-          <Button variant="ghost" size="icon" className={`profile-button ${page === "profile" ? "active" : ""}`} aria-label="Profile" aria-current={page === "profile" ? "page" : undefined} title="Profile" onClick={() => setActivePage("profile")}><Icon name="profile" /></Button>
+          <Button variant="ghost" size="icon" className={`profile-button ${page === "profile" ? "active" : ""}`} aria-label="Profile" aria-current={page === "profile" ? "page" : undefined} title="Profile" onClick={() => navigate("profile")}><Icon name="profile" /></Button>
         </div>
       </header>
 
@@ -552,12 +591,12 @@ function PlansPage({ user, isAdmin }: { user: User; isAdmin: boolean }) {
   return (
     <div className="content-page">
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <PageHeading eyebrow="PLAN LIBRARY" title="Plans" description="Ready documents available for provisional answers. SBC and public-source status remain unverified." />
+        <PageHeading eyebrow="PLAN LIBRARY" title="Plans" description="Ready SBC documents available for answers." />
         {isAdmin && <Button variant="outline" onClick={() => document.getElementById("admin-document-upload")?.scrollIntoView({ behavior: "smooth" })}>Upload document</Button>}
       </div>
       {error && <p role="alert" className="chat-error">{error}</p>}
       {loading ? <p>Loading plans…</p> : plans.length > 0 ? <div className="grid gap-3 md:grid-cols-2">{plans.map((plan) =>
-        <Card key={plan.plan_id}><CardContent className="p-5"><h2 className="font-semibold">{plan.insurer} {plan.plan_name}</h2><p className="mt-2 text-sm text-muted-foreground">{plan.coverage_type} · {plan.plan_type} · {plan.plan_year || "year unknown"}</p><p className="mt-2 text-xs text-muted-foreground">Available for provisional use; SBC/public-source status unverified.</p></CardContent></Card>
+        <Card key={plan.plan_id}><CardContent className="p-5"><h2 className="font-semibold">{plan.insurer} {plan.plan_name}</h2><p className="mt-2 text-sm text-muted-foreground">{plan.coverage_type} · {plan.plan_type} · {plan.plan_year || "year unknown"}</p></CardContent></Card>
       )}</div> : <Card><CardContent className="empty-state">
         <div className="empty-mark"><Icon name="book" /></div>
         <h2>No ready plans yet</h2>
@@ -605,10 +644,10 @@ function RetrievalPlayground({ user }: { user: User }) {
     } catch (err) { setError(err instanceof Error ? err.message : "Answer preview failed."); }
     finally { setBusy(false); }
   }
-  return <div className="content-page"><PageHeading eyebrow="ADMIN TOOLS" title="Retrieval playground" description="Search approved evidence with either method and chunking strategy. Corpus results remain provisional." />
+  return <div className="content-page"><PageHeading eyebrow="ADMIN TOOLS" title="Retrieval playground" description="Search approved evidence with either method and chunking strategy." />
     <Card><CardContent className="p-5"><form onSubmit={(event) => void search(event)} className="space-y-3">
       <label className="field-label">Question<textarea className="text-input min-h-20" value={question} onChange={(event) => setQuestion(event.target.value)} required maxLength={2000} /></label>
-      <div className="grid gap-3 md:grid-cols-3"><label className="field-label">Retrieval method<select className="text-input" value={method} onChange={(event) => setMethod(event.target.value)}><option value="bm25">BM25</option><option value="semantic">Semantic (FAISS)</option></select></label><label className="field-label">Chunking strategy<select className="text-input" value={strategy} onChange={(event) => setStrategy(event.target.value)}><option value="fixed_size">Fixed-size</option><option value="section_aware">Section-aware</option></select></label><div className="self-end flex gap-2"><Button className="!h-11 !bg-white leading-5" variant="outline" disabled={busy || !question.trim()}>{busy ? "Working…" : "Search evidence"}</Button><Button className="!h-11 leading-5" type="button" disabled={busy || !question.trim()} onClick={() => void previewAnswer()}>Preview answer</Button></div></div>
+      <div className="grid gap-3 md:grid-cols-3"><label className="field-label">Retrieval method<select className="text-input" value={method} onChange={(event) => setMethod(event.target.value)}><option value="bm25">BM25</option><option value="semantic">Semantic (FAISS)</option><option value="hybrid">Hybrid (BM25 + semantic, RRF)</option></select></label><label className="field-label">Chunking strategy<select className="text-input" value={strategy} onChange={(event) => setStrategy(event.target.value)}><option value="fixed_size">Fixed-size</option><option value="section_aware">Section-aware</option></select></label><div className="self-end flex gap-2"><Button className="!h-11 !bg-white leading-5" variant="outline" disabled={busy || !question.trim()}>{busy ? "Working…" : "Search evidence"}</Button><Button className="!h-11 leading-5" type="button" disabled={busy || !question.trim()} onClick={() => void previewAnswer()}>Preview answer</Button></div></div>
       <p className="text-xs text-muted-foreground">Answer preview uses the selected method and chunk strategy for broader coverage. Numeric answers use verified benefit records.</p>
     </form>{error && <p role="alert" className="mt-4 text-red-700">{error}</p>}{answerResult && <div className="mt-5"><Answer result={answerResult} /><details className="mt-3 text-xs"><summary>Answer diagnostics</summary><pre className="mt-2 overflow-auto rounded bg-muted p-3">{JSON.stringify({ matched_plans: answerResult.matched_plans, ...answerResult.debug }, null, 2)}</pre></details></div>}{result && <div className="mt-5 space-y-3"><p className="text-sm">{result.results.length} results · {Number(result.latency_ms).toFixed(1)} ms total · {result.model_name} ({result.model_version})</p>{result.timings && <p className="text-xs text-muted-foreground">chunks {Number(result.timings.corpus_load_ms).toFixed(1)} ms · vectors {Number(result.timings.embedding_load_ms || 0).toFixed(1)} ms · index {Number(result.timings.index_build_ms).toFixed(1)} ms · query embedding {Number(result.timings.query_embedding_ms).toFixed(1)} ms · model initialization {Number(result.timings.model_load_ms).toFixed(1)} ms · search {Number(result.timings.search_ms).toFixed(1)} ms</p>}{result.index_status && <p className="text-sm text-amber-700">{result.index_status}</p>}{result.results.map((row: any) => <Card key={row.chunk_id}><CardContent className="p-4"><div className="mb-2 text-xs text-muted-foreground">#{row.rank} · score {Number(row.score).toFixed(4)} · {row.plan_name || "Plan unavailable"} · {row.original_filename} · pages {row.page_start ?? "?"}–{row.page_end ?? "?"}</div><pre className="whitespace-pre-wrap text-sm">{row.chunk_text}</pre><details className="mt-2 text-xs"><summary>Provenance</summary><pre className="whitespace-pre-wrap">{JSON.stringify(row.provenance, null, 2)}</pre></details></CardContent></Card>)}</div>}</CardContent></Card>
     <AnswerHealth user={user} />
@@ -644,12 +683,42 @@ function EvaluationPage({ user }: { user: User }) {
   }
   async function refresh() { try { setData(await call("/api/admin/evaluation")); setError(""); } catch (err) { setError(err instanceof Error ? err.message : "Could not load evaluation data."); } }
   useEffect(() => { void refresh(); }, [user]);
-  async function run(method: "all" | "bm25" | "semantic") { setBusy(true); setError(""); try { setResult(await call(`/api/admin/evaluation/run?method=${method}`, "POST")); await refresh(); } catch (err) { setError(err instanceof Error ? err.message : "Evaluation run failed."); } finally { setBusy(false); } }
-  return <div className="content-page"><PageHeading eyebrow="QUALITY REVIEW" title="Evaluation set" description="Run the same labeled questions across all four retrieval and chunking combinations. Questions must have manually checked evidence labels." />
-    <Card><CardContent className="p-5"><p className="text-sm">Corpus: {data?.corpus || "Loading…"}</p><p className="text-sm">Manifest {data?.manifest_version || ""} · {data?.question_count ?? "…"} labeled questions (target: 20–30)</p><p className="mt-2 text-sm text-muted-foreground">Add manually verified question, document ID, and page labels to <code>evaluation/questions.json</code>. Ordinary live chat text is never recorded.</p>{error && <p role="alert" className="my-3 text-red-700">{error}</p>}<div className="mt-4 flex flex-wrap gap-2"><Button className="!bg-white" variant="outline" disabled={busy || !data?.question_count} onClick={() => void run("bm25")}>Run BM25 only</Button><Button variant="outline" disabled={busy || !data?.question_count} onClick={() => void run("semantic")}>Run semantic only</Button><Button disabled={busy || !data?.question_count} onClick={() => void run("all")}>{busy ? "Running…" : "Run all four combinations"}</Button></div>
+  async function run(method: "all" | "bm25" | "semantic" | "hybrid") { setBusy(true); setError(""); try { setResult(await call(`/api/admin/evaluation/run?method=${method}`, "POST")); await refresh(); } catch (err) { setError(err instanceof Error ? err.message : "Evaluation run failed."); } finally { setBusy(false); } }
+  return <div className="content-page"><PageHeading eyebrow="QUALITY REVIEW" title="Evaluation set" description="Run the same labeled questions across all six retrieval and chunking combinations. Questions must have manually checked evidence labels." />
+    <Card><CardContent className="p-5"><p className="text-sm">Corpus: {data?.corpus || "Loading…"}</p><p className="text-sm">Manifest {data?.manifest_version || ""} · {data?.question_count ?? "…"} labeled questions (target: 20–30)</p><p className="mt-2 text-sm text-muted-foreground">Add manually verified question, document ID, and page labels to <code>evaluation/questions.json</code>. Ordinary live chat text is never recorded.</p>{error && <p role="alert" className="my-3 text-red-700">{error}</p>}<div className="mt-4 flex flex-wrap gap-2"><Button className="!bg-white" variant="outline" disabled={busy || !data?.question_count} onClick={() => void run("bm25")}>Run BM25 only</Button><Button variant="outline" disabled={busy || !data?.question_count} onClick={() => void run("semantic")}>Run semantic only</Button><Button variant="outline" disabled={busy || !data?.question_count} onClick={() => void run("hybrid")}>Run hybrid only</Button><Button disabled={busy || !data?.question_count} onClick={() => void run("all")}>{busy ? "Running…" : "Run all six combinations"}</Button></div>
       {result && <div className="mt-5 space-y-3"><h2 className="font-semibold">Latest run</h2>{result.model_initialization_ms > 0 && <p className="text-xs text-muted-foreground">Semantic model initialization before query timing: {Number(result.model_initialization_ms).toFixed(1)} ms (reported separately)</p>}{result.results.map((row: any) => <div key={`${row.method}-${row.chunk_strategy}`}><p className="text-sm font-medium">{row.method} · {row.chunk_strategy}: hit rate {(row.hit_rate * 100).toFixed(1)}% · MRR {row.mean_reciprocal_rank.toFixed(3)} · request {row.mean_latency_ms.toFixed(1)} ms</p><p className="ml-3 text-xs text-muted-foreground">load {row.timings.corpus_load_ms.toFixed(1)} ms · index {row.timings.index_build_ms.toFixed(1)} ms · query embed {row.timings.query_embedding_ms.toFixed(1)} ms · model init {row.timings.model_load_ms.toFixed(1)} ms · search {row.timings.search_ms.toFixed(1)} ms</p>{row.by_question_type.map((group: any) => <p key={group.question_type} className="ml-3 text-xs text-muted-foreground">{group.question_type}: {(group.hit_rate * 100).toFixed(1)}% hit rate · MRR {group.mean_reciprocal_rank.toFixed(3)} · {group.mean_latency_ms.toFixed(1)} ms ({group.question_count} questions)</p>)}</div>)}</div>}
       {!!data?.runs?.length && <div className="mt-6"><h2 className="mb-2 font-semibold">Recent runs</h2>{data.runs.map((row: any) => <details className="border-t py-2" key={row.run_id}><summary className="cursor-pointer text-sm">Run {row.run_id} · {row.manifest_version} · {row.retrieval_method}/{row.chunk_strategy} v{row.chunk_strategy_version} · {row.hit_count}/{row.question_count} hits · MRR {Number(row.mean_reciprocal_rank).toFixed(3)} · request {Number(row.mean_latency_ms).toFixed(1)} ms · search {Number(row.mean_search_ms).toFixed(1)} ms</summary><p className="mt-2 break-all text-xs text-muted-foreground">Manifest SHA-256: {row.manifest_sha256 || "not captured"}</p><p className="break-all text-xs text-muted-foreground">Embedding model: {row.embedding_model_name ? `${row.embedding_model_name} · ${row.embedding_model_version} · ${row.embedding_model_fingerprint}` : "BM25 (no embedding model)"}</p><p className="text-xs text-muted-foreground">Model initialization before per-query timing: {Number(row.model_initialization_ms).toFixed(1)} ms</p><pre className="mt-2 overflow-auto rounded bg-muted p-3 text-xs">{JSON.stringify(row.corpus_snapshot, null, 2)}</pre></details>)}</div>}
-    </CardContent></Card></div>;
+    </CardContent></Card>
+    <OfflineReport call={call} /></div>;
+}
+
+function OfflineReport({ call }: { call: (path: string) => Promise<any> }) {
+  const [report, setReport] = useState<any>(null); const [error, setError] = useState("");
+  useEffect(() => { call("/api/admin/evaluation/report").then(setReport).catch((err) => setError(err instanceof Error ? err.message : "Could not load the offline report.")); }, []);
+  const pct = (value: number) => `${(value * 100).toFixed(0)}%`;
+  const ms = (value: number) => `${Math.round(value).toLocaleString()} ms`;
+  const summary = report?.summary; const gemini = report?.gemini;
+  const perQuery = new Map<string, any>((gemini?.questions || []).map((row: any) => [row.question_id, row]));
+  const runtime = report?.answers?.find((row: any) => row.method === "bm25" && row.chunk_strategy === "section_aware");
+  const metrics: [string, string, string][] = summary ? [
+    ["Answer accuracy", pct(summary.answer_accuracy), "≥ 95%"], ["Citation accuracy", pct(summary.citation_accuracy), "≥ 95%"],
+    ["Abstention accuracy", pct(summary.abstention_accuracy), "≥ 95%"], ["Extraction accuracy", pct(summary.extraction_accuracy), "≥ 95%"],
+    ["Best retrieval hit rate (top 5)", `${pct(summary.retrieval_hit_rate_best)} · ${summary.retrieval_best_configuration.join(" / ")}`, "≥ 95%"],
+    ["Deterministic latency mean / p95", `${ms(summary.deterministic_mean_latency_ms)} / ${ms(summary.deterministic_p95_latency_ms)}`, "mean ≤ 2,000 ms"],
+    ...(gemini ? [["Served latency mean / p95 (with Gemini)", `${ms(summary.served_mean_latency_ms)} / ${ms(summary.served_p95_latency_ms)}`, "mean ≤ 2,000 ms"],
+      ["Served answer accuracy (with Gemini)", pct(summary.served_answer_accuracy), "≥ 95%"],
+      ["Gemini tokens per query (skipped = 0)", Math.round(summary.mean_tokens_per_query).toString(), "report"]] as [string, string, string][] : []),
+  ] : [];
+  return <Card className="mt-5"><CardContent className="p-5"><h2 className="font-semibold">Offline evaluation report</h2>
+    <p className="mt-1 text-sm text-muted-foreground">Answer, citation, abstention, extraction, latency, and token results from <code>python -m app.evaluate --gemini</code>{report ? ` · ${report.generated_at} · manifest ${report.manifest_version}` : ""}. Latency excludes Neon, network, and sign-in.</p>
+    {error && <p role="alert" className="my-3 text-red-700">{error}</p>}
+    {summary && <table className="mt-4 w-full text-left text-sm"><thead><tr className="border-b"><th className="py-1">Metric</th><th>Result</th><th>Target</th></tr></thead><tbody>{metrics.map(([label, value, target]) => <tr key={label} className="border-b"><td className="py-1">{label}</td><td>{value}</td><td className="text-muted-foreground">{target}</td></tr>)}</tbody></table>}
+    {gemini && <p className="mt-3 text-xs text-muted-foreground">Gemini called on {gemini.calls} of {gemini.questions.length} queries; the rules-based check skipped {Object.entries(gemini.skipped).map(([key, count]) => `${count} ${key.replace("skipped_", "").replace(/_/g, " ")}`).join(", ")}. Per call: {Math.round(gemini.mean_input_tokens_per_call)} input + {Math.round(gemini.mean_output_tokens_per_call)} output tokens, {ms(gemini.mean_gemini_latency_ms_per_call)}.</p>}
+    {!!report?.answers?.length && <><h3 className="mt-5 text-sm font-semibold">Answers by configuration</h3><table className="mt-2 w-full text-left text-xs"><thead><tr className="border-b"><th className="py-1">Method / chunking</th><th>Correct</th><th>Answerable</th><th>Citations</th><th>Refusals correct</th><th>Mean / p95</th></tr></thead><tbody>{report.answers.map((row: any) => <tr key={`${row.method}-${row.chunk_strategy}`} className="border-b"><td className="py-1">{row.method} / {row.chunk_strategy}</td><td>{pct(row.answer_accuracy)}</td><td>{row.answerable_correct}/{row.answerable_total}</td><td>{row.citation_correct}/{row.answerable_total}</td><td>{row.refusals_correct}/{row.refusals_total}</td><td>{ms(row.mean_latency_ms)} / {ms(row.p95_latency_ms)}</td></tr>)}</tbody></table>
+      <p className="mt-2 text-xs text-muted-foreground">Abstention when labeled evidence is removed: {report.removed_evidence_abstention.passed}/{report.removed_evidence_abstention.total}.</p></>}
+    {report?.extraction && <><h3 className="mt-5 text-sm font-semibold">Extraction: {report.extraction.correct}/{report.extraction.total} fields correct</h3><ul className="mt-1 list-disc pl-5 text-xs text-muted-foreground">{report.extraction.fields.filter((field: any) => field.outcome !== "correct").map((field: any, index: number) => <li key={index}>{field.outcome}: {field.source_document_id} · {field.field}{field.service ? ` (${field.service})` : ""} {field.network || ""} {field.scope || ""} — expected {field.value}</li>)}</ul></>}
+    {runtime && <><h3 className="mt-5 text-sm font-semibold">Per query (runtime: BM25 / section-aware)</h3><div className="overflow-auto"><table className="mt-2 w-full text-left text-xs"><thead><tr className="border-b"><th className="py-1">Question</th><th>Expected</th><th>Got</th><th>Correct</th><th>Served by</th><th>Tokens</th><th>Latency</th></tr></thead><tbody>{runtime.questions.map((row: any) => { const served = perQuery.get(row.question_id); return <tr key={row.question_id} className="border-b align-top"><td className="py-1 pr-2">{row.question || row.question_id}</td><td>{row.expected_status}</td><td>{row.status}</td><td>{(served ? served.served_answer_correct : row.answer_correct) ? "yes" : "no"}</td><td>{served ? (served.served_by === "gemini" ? "Gemini" : served.gemini_status) : "deterministic"}</td><td>{served?.tokens?.total ?? 0}</td><td>{ms(served ? served.end_to_end_latency_ms : row.latency_ms)}</td></tr>; })}</tbody></table></div></>}
+  </CardContent></Card>;
 }
 
 function ProfilePage({ user, isAdmin, onSignOut }: { user: User; isAdmin: boolean; onSignOut: () => void }) {
