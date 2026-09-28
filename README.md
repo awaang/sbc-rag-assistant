@@ -1,13 +1,13 @@
 # SBC RAG Assistant
 
-An authenticated demo that answers questions about health benefit plans from six Summary of Benefits and Coverage (SBC) PDFs (four medical, one dental, one vision). Answers include plan, section, and page citations, and the assistant abstains when the evidence is insufficient.
+An assistant that answers questions about six health benefit plans (four medical, one dental, one vision). Answers include plan, section, and page citations, and the assistant abstains when the evidence is insufficient.
+
+**Live demo:** [sbc-rag-assistant.onrender.com](https://sbc-rag-assistant.onrender.com)
 
 ## Showing My Work
 
-My decisions, evaluation results, and reflections are written up in these two documents.
-
-- [Design Document](https://docs.google.com/document/d/11ZSbb5nSUgFteI2Futzni3PQPICCCrJea69ZhLoZgmA/edit?usp=sharing): answers the questions from the project spec, including which chunking strategy I picked and why, how BM25 and semantic search performed, how accurate extraction was, and what I would do differently with a real budget.
-- [Reflection Document](https://docs.google.com/document/d/19jw4UGpzimGdHUVPghQKite5jk0CcMReJ5caYO95gZ0/edit?usp=sharing)
+- [Design Document](https://docs.google.com/document/d/11ZSbb5nSUgFteI2Futzni3PQPICCCrJea69ZhLoZgmA/edit?usp=sharing): answers the questions from the project spec, including which chunking strategy I picked and why, how BM25 and semantic search performed, how accurate extraction was, and what I would do differently with a real budget
+- [Reflection Document](https://docs.google.com/document/d/19jw4UGpzimGdHUVPghQKite5jk0CcMReJ5caYO95gZ0/edit?usp=sharing): how I built this project, what went wrong, and what I learned
 
 ## Requirements
 
